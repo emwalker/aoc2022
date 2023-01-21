@@ -1,22 +1,5 @@
-#[macro_use]
-extern crate quick_error;
-
-use std::{io, num::ParseIntError};
-
-quick_error! {
-    #[derive(Debug)]
-    pub enum Error {
-        IO(err: std::io::Error) {
-            from()
-        }
-
-        ParseInt(err: ParseIntError) {
-            from()
-        }
-    }
-}
-
-type Result<T> = std::result::Result<T, Error>;
+use color_eyre::{self, Result};
+use std::io;
 
 #[derive(Debug)]
 struct Elf {
@@ -54,7 +37,10 @@ impl Runner {
             }
         }
 
-        Ok(Self { _input: input, elves })
+        Ok(Self {
+            _input: input,
+            elves,
+        })
     }
 
     fn run(&self) -> u64 {
@@ -67,6 +53,7 @@ impl Runner {
 }
 
 fn main() -> Result<()> {
+    color_eyre::install()?;
     let mut lines: Vec<String> = vec![];
 
     for line in io::stdin().lines() {
