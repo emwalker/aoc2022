@@ -20,7 +20,7 @@ type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Debug)]
 struct Elf {
-    pub calories: Vec<u16>,
+    pub calories: Vec<u64>,
 }
 
 impl Elf {
@@ -28,7 +28,7 @@ impl Elf {
         Self { calories: vec![] }
     }
 
-    fn total_calories(&self) -> u16 {
+    fn total_calories(&self) -> u64 {
         self.calories.iter().sum()
     }
 }
@@ -48,7 +48,7 @@ impl Runner {
                 continue;
             }
 
-            let calorie = line.parse::<u16>()?;
+            let calorie = line.parse::<u64>()?;
             if let Some(elf) = elves.last_mut() {
                 elf.calories.push(calorie);
             }
@@ -57,7 +57,7 @@ impl Runner {
         Ok(Self { _input: input, elves })
     }
 
-    fn run(&self) -> u16 {
+    fn run(&self) -> u64 {
         self.elves
             .iter()
             .map(|e| e.total_calories())
