@@ -64,6 +64,9 @@ impl Runner {
     }
 
     fn top(&self, n: usize) -> Take<Rev<std::collections::btree_set::Iter<'_, Elf>>> {
+        // BTreeSet implements DoubleEndedIterator, so this should be fast
+        // https://doc.rust-lang.org/std/collections/btree_set/struct.Iter.html
+        // https://stackoverflow.com/a/33699340/61048
         self.elves.iter().rev().take(n)
     }
 }
