@@ -1,40 +1,52 @@
 use color_eyre::{self, Result};
-use std::io;
+use std::{
+    collections::BTreeSet,
+    io,
+    iter::{Rev, Take},
+};
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq, PartialOrd, Ord)]
 struct Elf {
-    pub calories: Vec<u64>,
+    pub calories: u64,
 }
 
 impl Elf {
     fn new() -> Self {
-        Self { calories: vec![] }
+        Self { calories: 0 }
     }
 
-    fn total_calories(&self) -> u64 {
-        self.calories.iter().sum()
+    fn calories(&self) -> u64 {
+        self.calories
     }
 }
 
 struct Runner {
     _input: Vec<String>,
-    pub elves: Vec<Elf>,
+    pub elves: BTreeSet<Elf>,
 }
 
 impl Runner {
     fn parse(input: Vec<String>) -> Result<Self> {
-        let mut elves = vec![Elf::new()];
+        let mut elves = BTreeSet::new();
+        let mut current = Some(Elf::new());
 
         for line in input.iter() {
             if line.is_empty() {
-                elves.push(Elf::new());
+                if let Some(elf) = current.take() {
+                    elves.insert(elf);
+                }
+                current = Some(Elf::new());
                 continue;
             }
 
-            let calorie = line.parse::<u64>()?;
-            if let Some(elf) = elves.last_mut() {
-                elf.calories.push(calorie);
+            let calories = line.parse::<u64>()?;
+            if let Some(elf) = &mut current {
+                elf.calories += calories;
             }
+        }
+
+        if let Some(elf) = current.take() {
+            elves.insert(elf);
         }
 
         Ok(Self {
@@ -43,12 +55,16 @@ impl Runner {
         })
     }
 
-    fn run(&self) -> u64 {
+    fn max_calories(&self) -> u64 {
         self.elves
             .iter()
-            .map(|e| e.total_calories())
+            .map(|e| e.calories())
             .max()
             .unwrap_or_default()
+    }
+
+    fn top(&self, n: usize) -> Take<Rev<std::collections::btree_set::Iter<'_, Elf>>> {
+        self.elves.iter().rev().take(n)
     }
 }
 
@@ -61,9 +77,11 @@ fn main() -> Result<()> {
     }
 
     let runner = Runner::parse(lines)?;
-    let max = runner.run();
+    let max = runner.max_calories();
+    let top_three: u64 = runner.top(3).map(|e| e.calories()).sum();
 
     println!("max calories: {}", max);
+    println!("sum of top three: {}", top_three);
 
     Ok(())
 }
@@ -100,6 +118,7 @@ mod test {
         let runner = Runner::parse(input).unwrap();
 
         assert_eq!(runner.elves.len(), 5);
-        assert_eq!(runner.run(), 24000);
+        assert_eq!(runner.max_calories(), 24000);
+        assert_eq!(runner.top(3).map(|e| e.calories()).sum::<u64>(), 45000);
     }
 }
