@@ -20,8 +20,11 @@ enum Move {
 
 #[derive(Debug)]
 struct Round {
-    theirs: Move,
-    ours: Move,
+    their_move: Move,
+    // Part 1
+    our_move: Move,
+    // Part 2
+    desired_outcome: Outcome,
 }
 
 impl FromStr for Round {
@@ -33,35 +36,58 @@ impl FromStr for Round {
             return Err(format!("unexpected input: {:?}", moves));
         }
 
-        let theirs = match moves[0] {
+        let their_move = match moves[0] {
             "A" => Move::Rock,
             "B" => Move::Paper,
             "C" => Move::Scissors,
             _ => return Err(format!("invalid move: {}", moves[0])),
         };
 
-        let ours = match moves[1] {
-            "X" => Move::Rock,
-            "Y" => Move::Paper,
-            "Z" => Move::Scissors,
+        let (our_move, desired_outcome) = match moves[1] {
+            "X" => (Move::Rock, Outcome::TheirWin),
+            "Y" => (Move::Paper, Outcome::Draw),
+            "Z" => (Move::Scissors, Outcome::OurWin),
             _ => return Err(format!("invalid move: {}", moves[1])),
         };
 
-        Ok(Round { theirs, ours })
+        Ok(Round {
+            their_move,
+            our_move,
+            desired_outcome,
+        })
     }
 }
 
 impl Round {
-    fn our_score(&self) -> i32 {
-        (self.our_result() as i32) + (self.ours as i32)
+    fn part1_score(&self) -> i32 {
+        (self.part1_result() as i32) + (self.our_move as i32)
     }
 
-    fn our_result(&self) -> Outcome {
-        if self.theirs == self.ours {
+    fn part2_score(&self) -> i32 {
+        // TODO: generalize
+        let our_move = match (self.their_move, self.desired_outcome) {
+            (Move::Rock, Outcome::TheirWin) => Move::Scissors,
+            (Move::Rock, Outcome::Draw) => Move::Rock,
+            (Move::Rock, Outcome::OurWin) => Move::Paper,
+
+            (Move::Paper, Outcome::TheirWin) => Move::Rock,
+            (Move::Paper, Outcome::Draw) => Move::Paper,
+            (Move::Paper, Outcome::OurWin) => Move::Scissors,
+
+            (Move::Scissors, Outcome::TheirWin) => Move::Paper,
+            (Move::Scissors, Outcome::Draw) => Move::Scissors,
+            (Move::Scissors, Outcome::OurWin) => Move::Rock,
+        };
+
+        (self.desired_outcome as i32) + (our_move as i32)
+    }
+
+    fn part1_result(&self) -> Outcome {
+        if self.their_move == self.our_move {
             return Outcome::Draw;
         }
 
-        match (&self.theirs, &self.ours) {
+        match (&self.their_move, &self.our_move) {
             (Move::Rock, Move::Paper) => Outcome::OurWin,
             (Move::Paper, Move::Scissors) => Outcome::OurWin,
             (Move::Scissors, Move::Rock) => Outcome::OurWin,
@@ -71,24 +97,34 @@ impl Round {
 }
 
 struct Runner {
-    pub scores: Vec<i32>,
+    pub part1_scores: Vec<i32>,
+    pub part2_scores: Vec<i32>,
 }
 
 impl Runner {
     fn parse(input: &str) -> Result<Self> {
         let lines: Vec<&str> = input.lines().map(|l| l.trim()).collect();
-        let mut scores = vec![];
+        let mut part1_scores = vec![];
+        let mut part2_scores = vec![];
 
         for line in lines.into_iter() {
             let round = line.parse::<Round>().unwrap();
-            scores.push(round.our_score());
+            part1_scores.push(round.part1_score());
+            part2_scores.push(round.part2_score());
         }
 
-        Ok(Self { scores })
+        Ok(Self {
+            part1_scores,
+            part2_scores,
+        })
     }
 
-    fn total_score(&self) -> i32 {
-        self.scores.iter().sum()
+    fn part1_total(&self) -> i32 {
+        self.part1_scores.iter().sum()
+    }
+
+    fn part2_total(&self) -> i32 {
+        self.part2_scores.iter().sum()
     }
 }
 
@@ -97,7 +133,8 @@ fn main() -> Result<()> {
     let mut input = String::new();
     io::stdin().lock().read_to_string(&mut input)?;
     let runner = Runner::parse(&input)?;
-    println!("total score: {}", runner.total_score());
+    println!("part 1 total: {}", runner.part1_total());
+    println!("part 2 total: {}", runner.part2_total());
     Ok(())
 }
 
@@ -112,10 +149,12 @@ mod tests {
         C Z";
 
         let runner = Runner::parse(input).unwrap();
-        assert_eq!(runner.scores.len(), 3);
-        assert_eq!(runner.scores[0], 8);
-        assert_eq!(runner.scores[1], 1);
-        assert_eq!(runner.scores[2], 6);
-        assert_eq!(runner.total_score(), 15);
+        assert_eq!(runner.part1_scores.len(), 3);
+        assert_eq!(runner.part1_scores[0], 8);
+        assert_eq!(runner.part1_scores[1], 1);
+        assert_eq!(runner.part1_scores[2], 6);
+
+        assert_eq!(runner.part1_total(), 15);
+        assert_eq!(runner.part2_total(), 12);
     }
 }
