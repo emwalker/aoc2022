@@ -1,83 +1,98 @@
 use std::io;
+use std::str::FromStr;
 
 use color_eyre::{self, Report, Result};
 
-mod ranges {
-    use super::*;
-    use color_eyre::eyre::eyre;
-    use itertools::Itertools;
-    use std::ops;
-    use std::str::FromStr;
+use color_eyre::eyre::eyre;
+use itertools::Itertools;
+use std::ops;
 
-    struct Range(ops::Range<u32>);
+trait ElfRange {
+    fn superset(&self, other: &Self) -> bool;
 
-    impl FromStr for Range {
-        type Err = Report;
+    fn contains_or_is_contained(&self, other: &Self) -> bool;
 
-        fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-            if let Some((start, end)) = s.split('-').tuples().next() {
-                let start: u32 = start.parse()?;
-                let end: u32 = end.parse()?;
-                return Ok(Self(std::ops::Range { start, end }));
-            }
+    fn overlaps(&self, other: &Self) -> bool;
+}
 
-            Err(eyre!("bad input"))
-        }
+impl ElfRange for ops::RangeInclusive<u32> {
+    fn superset(&self, other: &Self) -> bool {
+        self.contains(other.start()) && self.contains(other.end())
     }
 
-    impl Range {
-        fn contains(&self, other: &Self) -> bool {
-            let ops::Range { start: s1, end: e1 } = self.0;
-            let ops::Range { start: s2, end: e2 } = other.0;
-            s1 <= s2 && e1 >= e2
-        }
-
-        fn overlaps(&self, other: &Self) -> bool {
-            let ops::Range { start: s1, end: e1 } = self.0;
-            let ops::Range { start: s2, end: e2 } = other.0;
-            (s1 <= s2 && s2 <= e1) || (s2 <= s1 && s1 <= e2)
-        }
+    fn contains_or_is_contained(&self, other: &Self) -> bool {
+        self.superset(other) || other.superset(self)
     }
 
-    pub struct Pair(Range, Range);
+    fn overlaps(&self, other: &Self) -> bool {
+        self.contains(other.start()) || other.contains(self.start())
+    }
+}
 
-    impl FromStr for Pair {
-        type Err = Report;
+struct RangeIn(ops::RangeInclusive<u32>);
 
-        fn from_str(s: &str) -> Result<Self, Self::Err> {
-            if let Some((left, right)) = s.trim().split(',').tuples().next() {
-                let left: Range = left.parse()?;
-                let right: Range = right.parse()?;
-                return Ok(Self(left, right));
-            }
+impl FromStr for RangeIn {
+    type Err = Report;
 
-            Err(eyre!("bad input"))
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        if let Some((s, e)) = s.split('-').tuples().next() {
+            let s: u32 = s.parse()?;
+            let e: u32 = e.parse()?;
+            return Ok(Self(s..=e));
         }
+
+        Err(eyre!("bad input"))
+    }
+}
+
+impl RangeIn {
+    fn contains_or_is_contained(&self, other: &Self) -> bool {
+        self.0.contains_or_is_contained(&other.0)
     }
 
-    impl Pair {
-        pub fn superset_exists(&self) -> bool {
-            self.0.contains(&self.1) || self.1.contains(&self.0)
+    fn overlaps(&self, other: &Self) -> bool {
+        self.0.overlaps(&other.0)
+    }
+}
+
+struct Pair(RangeIn, RangeIn);
+
+impl FromStr for Pair {
+    type Err = Report;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        if let Some((l, r)) = s.trim().split(',').collect_tuple::<(_, _)>() {
+            let l: RangeIn = l.parse()?;
+            let r: RangeIn = r.parse()?;
+            return Ok(Self(l, r));
         }
 
-        pub fn is_overlapping(&self) -> bool {
-            self.0.overlaps(&self.1)
-        }
+        Err(eyre!("bad input"))
+    }
+}
+
+impl Pair {
+    fn supersets(&self) -> bool {
+        self.0.contains_or_is_contained(&self.1)
+    }
+
+    fn overlaps(&self) -> bool {
+        self.0.overlaps(&self.1)
     }
 }
 
 fn main() -> Result<()> {
     color_eyre::install()?;
 
-    let it = io::stdin().lines().map(|l| l?.parse::<ranges::Pair>());
+    let it = io::stdin().lines().map(|l| l?.parse::<Pair>());
 
     let mut supersets = 0;
     let mut overlaps = 0;
 
     for pair in it {
         let pair = pair?;
-        supersets += pair.superset_exists() as u32;
-        overlaps += pair.is_overlapping() as u32;
+        supersets += pair.supersets() as u32;
+        overlaps += pair.overlaps() as u32;
     }
 
     println!("supersets: {supersets}");
@@ -100,16 +115,13 @@ mod tests {
         6-6,4-6
         2-6,4-8";
 
-        let supersets: usize = input
+        let counts = input
             .lines()
-            .map(|l| -> Result<ranges::Pair> { l.parse::<ranges::Pair>() })
-            .collect::<Result<Vec<_>>>()
-            .unwrap()
-            .into_iter()
-            .filter(ranges::Pair::superset_exists)
+            .map(|l| l.parse::<Pair>().expect("expected a range"))
+            .filter(Pair::supersets)
             .count();
 
-        assert_eq!(supersets, 2);
+        assert_eq!(counts, 2);
     }
 
     #[test]
@@ -122,15 +134,12 @@ mod tests {
         6-6,4-6
         2-6,4-8";
 
-        let overlaps: usize = input
+        let counts = input
             .lines()
-            .map(|l| -> Result<ranges::Pair> { l.parse::<ranges::Pair>() })
-            .collect::<Result<Vec<_>>>()
-            .unwrap()
-            .into_iter()
-            .filter(ranges::Pair::is_overlapping)
+            .map(|l| l.parse::<Pair>().expect("expected a range"))
+            .filter(Pair::overlaps)
             .count();
 
-        assert_eq!(overlaps, 4);
+        assert_eq!(counts, 4);
     }
 }

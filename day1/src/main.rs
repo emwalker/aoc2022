@@ -83,8 +83,8 @@ fn main() -> Result<()> {
     let max = runner.max_calories();
     let top_three: u64 = runner.top(3).map(|e| e.calories()).sum();
 
-    println!("max calories: {}", max);
-    println!("sum of top three: {}", top_three);
+    println!("max calories: {max}");
+    println!("sum of top three: {top_three}");
 
     Ok(())
 }

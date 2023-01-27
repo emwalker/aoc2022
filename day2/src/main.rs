@@ -33,7 +33,7 @@ impl FromStr for Round {
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         let moves: Vec<_> = s.split(' ').collect();
         if moves.len() != 2 {
-            return Err(format!("unexpected input: {:?}", moves));
+            return Err(format!("unexpected input: {moves:?}"));
         }
 
         let their_move = match moves[0] {
