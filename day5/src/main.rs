@@ -25,11 +25,11 @@ struct Stack {
 }
 
 impl Stack {
-    fn pop(&mut self) -> Option<Crate> {
+    fn pop_front(&mut self) -> Option<Crate> {
         self.crates.pop_front()
     }
 
-    fn push(&mut self, c: Crate) {
+    fn push_front(&mut self, c: Crate) {
         self.crates.push_front(c);
     }
 
@@ -166,60 +166,100 @@ impl StackBuilder {
         self.stacks.len()
     }
 
-    fn finalize(self) -> Stacks {
-        Stacks(self.stacks)
+    fn finalize(self, strategy: Strategy) -> Stacks {
+        Stacks {
+            stacks: self.stacks,
+            strategy,
+        }
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+enum Strategy {
+    CrateMover9000,
+    CrateMover9001,
+}
+
 #[derive(Debug)]
-struct Stacks(HashMap<usize, Stack>);
+struct Stacks {
+    strategy: Strategy,
+    stacks: HashMap<usize, Stack>,
+}
 
 impl Stacks {
     fn top_crates(&self) -> String {
-        self.0
+        self.stacks
             .keys()
             .sorted()
-            .flat_map(|label| self.0.get(label).unwrap().front())
+            .flat_map(|label| self.stacks.get(label).unwrap().front())
             .join("")
     }
 
     fn move_crates(&mut self, line: &str) -> Result<bool> {
         let m = line.parse::<Move>()?;
-        let inner = &mut self.0;
+        let inner = &mut self.stacks;
+        let mut load = VecDeque::new();
 
         for _ in 0..m.count {
-            let from = inner
-                .get_mut(&m.from)
-                .unwrap()
-                .pop()
-                .ok_or(eyre!("nothing in stack {}", m.from))?;
+            match self.strategy {
+                Strategy::CrateMover9000 => {
+                    let from = inner
+                        .get_mut(&m.from)
+                        .ok_or(eyre!("no stack {}", m.from))?
+                        .pop_front()
+                        .ok_or(eyre!("nothing in stack {}", m.from))?;
 
-            inner.get_mut(&m.to).unwrap().push(from);
+                    load.push_back(from);
+                }
+
+                Strategy::CrateMover9001 => {
+                    let from = inner
+                        .get_mut(&m.from)
+                        .ok_or(eyre!("no stack {}", m.from))?
+                        .pop_front()
+                        .ok_or(eyre!("nothing in stack {}", m.from))?;
+
+                    load.push_front(from);
+                }
+            };
+        }
+
+        let dest = inner.get_mut(&m.to).ok_or(eyre!("no stack {}", m.to))?;
+
+        for c in load {
+            dest.push_front(c);
         }
 
         Ok(true)
     }
 }
 
-struct Port(Box<dyn Iterator<Item = String>>);
+struct Port<'s> {
+    lines: &'s [String],
+    strategy: Strategy,
+}
 
-impl Port {
+impl<'s> Port<'s> {
+    fn new(lines: &'s [String], strategy: Strategy) -> Self {
+        Self { lines, strategy }
+    }
+
     fn run(&mut self) -> Result<Stacks> {
         let mut builder = StackBuilder::new();
-        let mut it = (&mut self.0).enumerate();
+        let mut it = self.lines.iter().enumerate();
 
         for (i, line) in &mut it {
             if i > 0 && line.trim().is_empty() {
                 break;
             }
 
-            builder.make_stacks(&line)?;
+            builder.make_stacks(line)?;
         }
 
-        let mut stacks = builder.finalize();
+        let mut stacks = builder.finalize(self.strategy);
 
         for (_i, line) in it {
-            stacks.move_crates(&line)?;
+            stacks.move_crates(line)?;
         }
 
         Ok(stacks)
@@ -227,11 +267,21 @@ impl Port {
 }
 
 fn main() -> Result<()> {
-    let it = io::stdin().lines().map(|line| line.unwrap());
-    let mut port = Port(Box::new(it));
-    let stacks = port.run()?;
+    let lines = io::stdin()
+        .lines()
+        .map(|line| line.unwrap())
+        .collect::<Vec<String>>();
 
-    println!("top row: {}", stacks.top_crates());
+    let crates9000 = Port::new(&lines, Strategy::CrateMover9000)
+        .run()?
+        .top_crates();
+
+    let crates9001 = Port::new(&lines, Strategy::CrateMover9001)
+        .run()?
+        .top_crates();
+
+    println!("CrateMover 9000: {crates9000}");
+    println!("CrateMover 9001: {crates9001}");
 
     Ok(())
 }
@@ -275,7 +325,7 @@ move 1 from 1 to 2";
         let stack = builder.get(3).unwrap();
         assert_eq!(stack.crates.len(), 1);
 
-        let stacks = builder.finalize();
+        let stacks = builder.finalize(Strategy::CrateMover9000);
         assert_eq!(stacks.top_crates(), "NDP");
     }
 
@@ -288,7 +338,7 @@ move 1 from 1 to 2";
     }
 
     #[test]
-    fn port() {
+    fn crate_mover_9000() {
         let input = "    [D]
 [N] [C]
 [Z] [M] [P]
@@ -299,9 +349,27 @@ move 3 from 1 to 3
 move 2 from 2 to 1
 move 1 from 1 to 2";
 
-        let it = input.lines().map(str::to_owned);
-        let mut port = Port(Box::new(it));
+        let lines: Vec<_> = input.lines().map(str::to_owned).collect();
+        let mut port = Port::new(&lines, Strategy::CrateMover9000);
         let stacks = port.run().unwrap();
         assert_eq!(stacks.top_crates(), "CMZ");
+    }
+
+    #[test]
+    fn crate_mover_9001() {
+        let input = "    [D]
+[N] [C]
+[Z] [M] [P]
+ 1   2   3
+
+move 1 from 2 to 1
+move 3 from 1 to 3
+move 2 from 2 to 1
+move 1 from 1 to 2";
+
+        let lines: Vec<_> = input.lines().map(str::to_owned).collect();
+        let mut port = Port::new(&lines, Strategy::CrateMover9001);
+        let stacks = port.run().unwrap();
+        assert_eq!(stacks.top_crates(), "MCD");
     }
 }
