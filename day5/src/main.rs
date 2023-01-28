@@ -290,9 +290,7 @@ fn main() -> Result<()> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn parse_input() {
-        let input = "    [D]
+    const INPUT: &str = "    [D]
 [N] [C]
 [Z] [M] [P]
  1   2   3
@@ -302,9 +300,11 @@ move 3 from 1 to 3
 move 2 from 2 to 1
 move 1 from 1 to 2";
 
+    #[test]
+    fn parse_input() {
         let mut builder = StackBuilder::new();
 
-        for line in input.lines() {
+        for line in INPUT.lines() {
             if line.is_empty() {
                 break;
             }
@@ -339,17 +339,7 @@ move 1 from 1 to 2";
 
     #[test]
     fn crate_mover_9000() {
-        let input = "    [D]
-[N] [C]
-[Z] [M] [P]
- 1   2   3
-
-move 1 from 2 to 1
-move 3 from 1 to 3
-move 2 from 2 to 1
-move 1 from 1 to 2";
-
-        let lines: Vec<_> = input.lines().map(str::to_owned).collect();
+        let lines: Vec<_> = INPUT.lines().map(str::to_owned).collect();
         let mut port = Port::new(&lines, Strategy::CrateMover9000);
         let stacks = port.run().unwrap();
         assert_eq!(stacks.top_crates(), "CMZ");
@@ -357,17 +347,7 @@ move 1 from 1 to 2";
 
     #[test]
     fn crate_mover_9001() {
-        let input = "    [D]
-[N] [C]
-[Z] [M] [P]
- 1   2   3
-
-move 1 from 2 to 1
-move 3 from 1 to 3
-move 2 from 2 to 1
-move 1 from 1 to 2";
-
-        let lines: Vec<_> = input.lines().map(str::to_owned).collect();
+        let lines: Vec<_> = INPUT.lines().map(str::to_owned).collect();
         let mut port = Port::new(&lines, Strategy::CrateMover9001);
         let stacks = port.run().unwrap();
         assert_eq!(stacks.top_crates(), "MCD");
