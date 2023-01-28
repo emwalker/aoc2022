@@ -1,296 +1,224 @@
-use color_eyre::{self, eyre::eyre, Report, Result};
+// Heavily copied from Amos's discussion, here:
+// https://fasterthanli.me/series/advent-of-code-2022/part-5#reader-suggestion-use-nom-s-number-parser
+
+use color_eyre::{self, Result};
 use itertools::Itertools;
-use lazy_static::lazy_static;
-use regex::Regex;
 use std::{
-    collections::{HashMap, VecDeque},
-    fmt::Display,
+    fmt::{Debug, Display, Write},
     io,
-    str::FromStr,
 };
 
-#[derive(Debug)]
-struct Crate(String);
+#[derive(Copy, Clone)]
+pub struct Crate(char);
+
+impl Debug for Crate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_char(self.0)
+    }
+}
 
 impl Display for Crate {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
+        f.write_char(self.0)
     }
 }
 
 #[derive(Debug)]
-struct Stack {
-    _label: usize,
-    crates: VecDeque<Crate>,
-}
-
-impl Stack {
-    fn pop_front(&mut self) -> Option<Crate> {
-        self.crates.pop_front()
-    }
-
-    fn push_front(&mut self, c: Crate) {
-        self.crates.push_front(c);
-    }
-
-    fn front(&self) -> Option<&Crate> {
-        self.crates.front()
-    }
-}
-
-#[derive(Debug)]
-struct Move {
-    count: u32,
-    from: usize,
-    to: usize,
-}
-
-impl FromStr for Move {
-    type Err = Report;
-
-    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        lazy_static! {
-            static ref RE: Regex =
-                Regex::new(r"move (?P<count>\d+) from (?P<from>\w+) to (?P<to>\w+)").unwrap();
-        }
-
-        if !RE.is_match(s) {
-            return Err(eyre!("unknown move: {s}"));
-        }
-
-        if let Some(cap) = RE.captures(s) {
-            match (cap.name("count"), cap.name("from"), cap.name("to")) {
-                (Some(count), Some(from), Some(to)) => {
-                    let count = count.as_str().parse::<u32>()?;
-                    return Ok(Self {
-                        count,
-                        from: from.as_str().parse::<usize>()?,
-                        to: to.as_str().parse::<usize>()?,
-                    });
-                }
-
-                _ => return Err(eyre!("unknown move: {s}")),
-            }
-        };
-
-        Err(eyre!("bad move: {s}"))
-    }
-}
-
-#[derive(Debug, Default)]
-struct StackBuilder {
-    columns: HashMap<usize, VecDeque<Crate>>,
-    stacks: HashMap<usize, Stack>,
-}
-
-impl StackBuilder {
-    fn new() -> Self {
-        Self::default()
-    }
-
-    fn make_stacks(&mut self, line: &str) -> Result<bool> {
-        if self.add_labels(line)? {
-            return Ok(true);
-        }
-
-        if self.add_crates(line) {
-            return Ok(true);
-        }
-
-        return Err(eyre!("failed to parse line: {line}"));
-    }
-
-    fn add_labels(&mut self, line: &str) -> Result<bool> {
-        lazy_static! {
-            static ref RE: Regex = Regex::new(r"(?P<label>\d+)").unwrap();
-        }
-
-        if !RE.is_match(line) {
-            return Ok(false);
-        }
-
-        for (j, cap) in RE.captures_iter(line).enumerate() {
-            let crates = self.columns.remove(&j).unwrap_or_default();
-            if let Some(label) = cap.name("label") {
-                let label = label.as_str().parse::<usize>()?;
-
-                let stack = Stack {
-                    crates,
-                    _label: label,
-                };
-
-                self.stacks.insert(label, stack);
-            }
-        }
-
-        Ok(true)
-    }
-
-    fn add_crates(&mut self, line: &str) -> bool {
-        let mut curr = 0;
-        let mut i = 0;
-
-        while curr < line.len() {
-            let width = (line.len() - curr).min(4);
-            let field = &line[curr..(curr + width)];
-            self.add_crate(i, field);
-            curr += width;
-            i += 1;
-        }
-
-        true
-    }
-
-    fn add_crate(&mut self, i: usize, s: &str) {
-        lazy_static! {
-            static ref RE: Regex = Regex::new(r"\[(?P<label>\D)\]").unwrap();
-        }
-
-        let col: &mut VecDeque<_> = self.columns.entry(i).or_insert(VecDeque::new());
-
-        if let Some(cap) = RE.captures_iter(s).next() {
-            if let Some(label) = cap.name("label") {
-                let c = Crate(label.as_str().to_owned());
-                col.push_back(c);
-            }
-        }
-    }
-
-    #[allow(unused)]
-    fn get(&self, index: usize) -> Option<&Stack> {
-        self.stacks.get(&index)
-    }
-
-    #[allow(unused)]
-    fn len(&self) -> usize {
-        self.stacks.len()
-    }
-
-    fn finalize(self) -> Stacks {
-        Stacks {
-            stacks: self.stacks,
-        }
-    }
-}
-
-trait Strategy {
-    fn move_crates(&self, stacks: &mut Stacks, line: &str) -> Result<bool>;
+pub struct Instruction {
+    count: usize,
+    src: usize,
+    dst: usize,
 }
 
 struct CrateMover9000;
 
-impl Strategy for CrateMover9000 {
-    fn move_crates(&self, outer: &mut Stacks, line: &str) -> Result<bool> {
-        let m = line.parse::<Move>()?;
-        let stacks = &mut outer.stacks;
-
-        for _ in 0..m.count {
-            let c = stacks
-                .get_mut(&m.from)
-                .ok_or(eyre!("no stack {}", m.from))?
-                .pop_front()
-                .ok_or(eyre!("nothing in stack {}", m.from))?;
-
-            stacks
-                .get_mut(&m.to)
-                .ok_or(eyre!("no stack {}", m.to))?
-                .push_front(c);
+impl CrateMover9000 {
+    fn apply(ins: &Instruction, stacks: &mut Stacks) {
+        for _ in 0..ins.count {
+            let el = stacks.0[ins.src].pop().unwrap();
+            stacks.0[ins.dst].push(el);
         }
-
-        Ok(true)
     }
 }
 
 struct CrateMover9001;
 
-impl Strategy for CrateMover9001 {
-    fn move_crates(&self, outer: &mut Stacks, line: &str) -> Result<bool> {
-        let m = line.parse::<Move>()?;
-        let mut load = VecDeque::new();
-
-        let from = outer
-            .stacks
-            .get_mut(&m.from)
-            .ok_or(eyre!("no stack {}", m.from))?;
-
-        for _ in 0..m.count {
-            let c = from
-                .pop_front()
-                .ok_or(eyre!("nothing in stack {}", m.from))?;
-            load.push_front(c);
+impl CrateMover9001 {
+    fn apply(ins: &Instruction, stacks: &mut Stacks) {
+        for krate in (0..ins.count)
+            .map(|_| stacks.0[ins.src].pop().unwrap())
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+        {
+            stacks.0[ins.dst].push(krate);
         }
-
-        let dest = outer
-            .stacks
-            .get_mut(&m.to)
-            .ok_or(eyre!("no stack {}", m.to))?;
-
-        for c in load {
-            dest.push_front(c);
-        }
-
-        Ok(true)
     }
 }
 
-#[derive(Debug)]
-struct Stacks {
-    stacks: HashMap<usize, Stack>,
-}
+#[derive(Clone, Debug)]
+pub struct Stacks(pub Vec<Vec<Crate>>);
 
 impl Stacks {
     fn top_crates(&self) -> String {
-        self.stacks
-            .keys()
-            .sorted()
-            .flat_map(|label| self.stacks.get(label).unwrap().front())
-            .join("")
+        self.0.iter().map(|stack| stack.last().unwrap()).join("")
+    }
+
+    #[allow(unused)]
+    fn len(&self) -> usize {
+        self.0.len()
     }
 }
 
-struct Port<'s> {
-    lines: &'s [String],
-    strategy: &'s dyn Strategy,
-}
+mod parser {
+    use std::collections::{HashMap, VecDeque};
 
-impl<'s> Port<'s> {
-    fn new(lines: &'s [String], strategy: &'s dyn Strategy) -> Self {
-        Self { lines, strategy }
+    use super::*;
+    use nom::{
+        branch::alt,
+        bytes::complete::{tag, take},
+        combinator::{all_consuming, map},
+        multi::separated_list1,
+        sequence::{delimited, preceded, tuple},
+        Finish, IResult,
+    };
+
+    fn parse_crate(i: &str) -> IResult<&str, Crate> {
+        let first_char = |s: &str| Crate(s.chars().next().unwrap());
+        let f = delimited(tag("["), take(1_usize), tag("]"));
+        map(f, first_char)(i)
     }
 
-    fn run(&mut self) -> Result<Stacks> {
-        let mut builder = StackBuilder::new();
-        let mut it = self.lines.iter().enumerate();
+    fn parse_hole(i: &str) -> IResult<&str, ()> {
+        map(tag("   "), drop)(i)
+    }
 
-        for (i, line) in &mut it {
-            if i > 0 && line.trim().is_empty() {
-                break;
+    fn parse_crate_or_hole(i: &str) -> IResult<&str, Option<Crate>> {
+        alt((map(parse_crate, Some), map(parse_hole, |_| None)))(i)
+    }
+
+    fn parse_crate_line(i: &str) -> IResult<&str, Vec<Option<Crate>>> {
+        separated_list1(tag(" "), parse_crate_or_hole)(i)
+    }
+
+    #[derive(Debug)]
+    pub struct Ast(Vec<Vec<Option<Crate>>>);
+
+    impl Ast {
+        pub fn finalize(self) -> Stacks {
+            let Self(crates) = self;
+            assert!(!crates.is_empty());
+
+            // Convert rows of crates to stacks
+            let mut cols: HashMap<usize, VecDeque<Crate>> = HashMap::new();
+
+            for row in crates {
+                for (i, c) in row.into_iter().enumerate() {
+                    if let Some(c) = c {
+                        cols.entry(i).or_insert(VecDeque::new()).push_front(c);
+                    }
+                }
             }
 
-            builder.make_stacks(line)?;
+            let indexes: Vec<_> = cols.keys().sorted().cloned().collect();
+            let stacks: Vec<_> = indexes
+                .iter()
+                .map(|i| cols.remove(i).unwrap().into_iter().collect_vec())
+                .collect();
+
+            Stacks(stacks)
         }
+    }
 
-        let mut stacks = builder.finalize();
+    pub fn parse_stacks<I>(it: &mut I) -> Result<Ast>
+    where
+        I: Iterator<Item = String>,
+    {
+        let crates = it
+            .map_while(|line| {
+                all_consuming(parse_crate_line)(&line)
+                    .finish()
+                    .ok()
+                    .map(|(_, c)| c)
+            })
+            .collect();
 
-        for (_i, line) in it {
-            self.strategy.move_crates(&mut stacks, line)?;
+        Ok(Ast(crates))
+    }
+
+    fn parse_number(i: &str) -> IResult<&str, usize> {
+        map(nom::character::complete::u32, |n| n as _)(i)
+    }
+
+    fn parse_pile_number(i: &str) -> IResult<&str, usize> {
+        map(parse_number, |i| i - 1)(i)
+    }
+
+    fn parse_instruction(i: &str) -> IResult<&str, Instruction> {
+        map(
+            tuple((
+                preceded(tag("move "), parse_number),
+                preceded(tag(" from "), parse_pile_number),
+                preceded(tag(" to "), parse_pile_number),
+            )),
+            |(count, src, dst)| Instruction { count, src, dst },
+        )(i)
+    }
+
+    pub struct Instructions<Iter> {
+        iter: Iter,
+    }
+
+    impl<Iter> Instructions<Iter> {
+        pub fn new(iter: Iter) -> Self {
+            Instructions { iter }
         }
+    }
 
-        Ok(stacks)
+    impl<Iter> Iterator for Instructions<Iter>
+    where
+        Iter: Iterator<Item = String>,
+    {
+        type Item = Instruction;
+
+        fn next(&mut self) -> Option<Self::Item> {
+            self.iter.next().and_then(|line| {
+                all_consuming(parse_instruction)(&line)
+                    .finish()
+                    .ok()
+                    .map(|(_rest, ins)| ins)
+            })
+        }
+    }
+
+    pub trait InstructionsIterExt: Sized {
+        fn instructions(self) -> Instructions<Self>;
+    }
+
+    impl<Iter> InstructionsIterExt for Iter {
+        fn instructions(self) -> Instructions<Iter> {
+            Instructions::new(self)
+        }
     }
 }
 
 fn main() -> Result<()> {
-    let lines = io::stdin()
-        .lines()
-        .map(|line| line.unwrap())
-        .collect::<Vec<String>>();
+    use crate::parser::InstructionsIterExt;
 
-    let crates9000 = Port::new(&lines, &CrateMover9000).run()?.top_crates();
-    let crates9001 = Port::new(&lines, &CrateMover9001).run()?.top_crates();
+    let mut it = io::stdin().lines().flat_map(|l| l.ok());
+    let mut cm9000 = parser::parse_stacks(&mut it)?.finalize();
+    let mut cm9001 = cm9000.clone();
 
-    println!("CrateMover 9000: {crates9000}");
-    println!("CrateMover 9001: {crates9001}");
+    // We're expecting a blank line
+    assert_eq!(it.next(), Some("".into()));
+
+    for ins in it.instructions() {
+        CrateMover9000::apply(&ins, &mut cm9000);
+        CrateMover9001::apply(&ins, &mut cm9001);
+    }
+
+    println!("CrateMover 9000: {}", cm9000.top_crates());
+    println!("CrateMover 9001: {}", cm9001.top_crates());
 
     Ok(())
 }
@@ -298,6 +226,7 @@ fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::parser::InstructionsIterExt;
 
     const INPUT: &str = "    [D]
 [N] [C]
@@ -310,55 +239,41 @@ move 2 from 2 to 1
 move 1 from 1 to 2";
 
     #[test]
-    fn parse_input() {
-        let mut builder = StackBuilder::new();
+    fn crate_mover_9000() {
+        let mut it = INPUT.lines().map(str::to_string);
+        let mut stacks = parser::parse_stacks(&mut it).unwrap().finalize();
+        assert_eq!(it.next().unwrap(), "");
 
-        for line in INPUT.lines() {
-            if line.is_empty() {
-                break;
-            }
-
-            if !builder.make_stacks(line).unwrap() {
-                break;
-            }
+        for ins in it.instructions() {
+            CrateMover9000::apply(&ins, &mut stacks);
         }
 
-        assert_eq!(builder.len(), 3);
-
-        let stack = builder.get(1).unwrap();
-        assert_eq!(stack.crates.len(), 2);
-
-        let stack = builder.get(2).unwrap();
-        assert_eq!(stack.crates.len(), 3);
-
-        let stack = builder.get(3).unwrap();
-        assert_eq!(stack.crates.len(), 1);
-
-        let stacks = builder.finalize();
-        assert_eq!(stacks.top_crates(), "NDP");
-    }
-
-    #[test]
-    fn parse_move() {
-        let m = "move 1 from 2 to 1".parse::<Move>().unwrap();
-        assert_eq!(m.count, 1);
-        assert_eq!(m.from, 2);
-        assert_eq!(m.to, 1);
-    }
-
-    #[test]
-    fn crate_mover_9000() {
-        let lines: Vec<_> = INPUT.lines().map(str::to_owned).collect();
-        let mut port = Port::new(&lines, &CrateMover9000);
-        let stacks = port.run().unwrap();
         assert_eq!(stacks.top_crates(), "CMZ");
     }
 
     #[test]
     fn crate_mover_9001() {
-        let lines: Vec<_> = INPUT.lines().map(str::to_owned).collect();
-        let mut port = Port::new(&lines, &CrateMover9001);
-        let stacks = port.run().unwrap();
+        let mut it = INPUT.lines().map(str::to_string);
+        let mut stacks = parser::parse_stacks(&mut it).unwrap().finalize();
+        assert_eq!(it.next().unwrap(), "");
+
+        for ins in it.instructions() {
+            CrateMover9001::apply(&ins, &mut stacks);
+        }
+
         assert_eq!(stacks.top_crates(), "MCD");
+    }
+
+    #[test]
+    fn parse_input() {
+        let mut it = INPUT.lines().map(str::to_string);
+        let stacks = parser::parse_stacks(&mut it).unwrap().finalize();
+        assert_eq!(stacks.len(), 3);
+
+        // We've consumed the line of crate labels, and now we're at the blank line
+        assert_eq!(it.next().unwrap(), "");
+
+        let ins: Vec<_> = it.instructions().collect();
+        assert_eq!(ins.len(), 4);
     }
 }
