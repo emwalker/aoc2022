@@ -10,8 +10,8 @@ pub struct Node {
 }
 
 impl Node {
-    fn total_size(&self) -> usize {
-        self.size + self.children.iter().map(|n| n.total_size()).sum::<usize>()
+    fn used_space(&self) -> usize {
+        self.size + self.children.iter().map(|n| n.used_space()).sum::<usize>()
     }
 
     fn is_directory(&self) -> bool {
@@ -56,15 +56,11 @@ mod parser {
     }
 
     fn parse_chdir(i: &str) -> IResult<&str, Line> {
-        map(preceded(tag("$ cd "), parse_identifier), |name| {
-            Line::Chdir(name)
-        })(i)
+        map(preceded(tag("$ cd "), parse_identifier), Line::Chdir)(i)
     }
 
     fn parse_dir(i: &str) -> IResult<&str, Line> {
-        map(preceded(tag("dir "), parse_identifier), |name| {
-            Line::Dir(name)
-        })(i)
+        map(preceded(tag("dir "), parse_identifier), Line::Dir)(i)
     }
 
     fn parse_number(i: &str) -> IResult<&str, usize> {
@@ -171,9 +167,24 @@ impl Task {
     fn part1(&self) -> usize {
         self.0
             .subdirs()
-            .map(|d| d.total_size())
+            .map(|d| d.used_space())
             .filter(|n| *n <= 100_000)
             .sum()
+    }
+
+    fn part2(&self) -> usize {
+        let avail: usize = 70_000_000;
+        let used: usize = self.0.used_space();
+        let unused = avail.checked_sub(used).unwrap_or_default();
+        let need: usize = 30_000_000;
+        let free = need.checked_sub(unused).unwrap_or_default();
+
+        self.0
+            .subdirs()
+            .map(|d| d.used_space())
+            .filter(|n| *n >= free)
+            .min()
+            .unwrap_or_default()
     }
 }
 
@@ -186,6 +197,7 @@ fn main() -> Result<()> {
     let task = Task::new(root);
 
     println!("part 1: {}", task.part1());
+    println!("part 2: {}", task.part2());
 
     Ok(())
 }
@@ -243,5 +255,12 @@ mod tests {
         let root = parse(input()).unwrap().finalize().unwrap();
         let task = Task::new(root);
         assert_eq!(task.part1(), 95437);
+    }
+
+    #[test]
+    fn part2() {
+        let root = parse(input()).unwrap().finalize().unwrap();
+        let task = Task::new(root);
+        assert_eq!(task.part2(), 24933642);
     }
 }
