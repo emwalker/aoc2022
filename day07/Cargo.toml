@@ -1,5 +1,5 @@
 [package]
-name = "day5"
+name = "day07"
 version = "0.1.0"
 edition = "2021"
 
@@ -7,7 +7,4 @@ edition = "2021"
 
 [dependencies]
 color-eyre = "0.6.2"
-itertools = "0.10.5"
-lazy_static = "1.4.0"
 nom = "7.1.3"
-regex = "1.7.1"
