@@ -1,6 +1,7 @@
 use color_eyre::{self, eyre::eyre, Report, Result};
 use itertools::Itertools;
 use std::{
+    fmt::{Debug, Display},
     io::{self, Read},
     str::FromStr,
 };
@@ -140,6 +141,58 @@ impl<'p> Iterator for ReadingIter<'p> {
     }
 }
 
+#[derive(Eq, PartialEq)]
+struct CrtState(Vec<bool>);
+
+const CRT_ROWS: usize = 6;
+const CRT_COLS: usize = 40;
+
+impl FromStr for CrtState {
+    type Err = Report;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        let mut pixels = vec![false; CRT_ROWS * CRT_COLS];
+
+        for (i, line) in s.lines().enumerate() {
+            for (j, c) in line.trim().chars().enumerate() {
+                let value = match c {
+                    '#' => true,
+                    '.' => false,
+                    _ => return Err(eyre!("unexpected character at ({i}, {j}): {c}")),
+                };
+
+                if let Some(cell) = pixels.get_mut(i * CRT_COLS + j) {
+                    *cell = value;
+                } else {
+                    return Err(eyre!("out of bounds access: ({i}, {j})"));
+                }
+            }
+        }
+
+        Ok(Self(pixels))
+    }
+}
+
+impl Display for CrtState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = (0..CRT_ROWS)
+            .map(move |i| {
+                (0..CRT_COLS)
+                    .map(|j| if self.0[i * CRT_COLS + j] { "#" } else { " " })
+                    .join("")
+            })
+            .join("\n");
+
+        f.write_str(&s)
+    }
+}
+
+impl Debug for CrtState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_fmt(format_args!("\n{self}\n"))
+    }
+}
+
 struct Task(Program);
 
 impl Task {
@@ -152,6 +205,20 @@ impl Task {
         let mut p = self.0.clone();
         p.signal_strength().take(6).sum()
     }
+
+    fn part2(&self) -> Result<CrtState> {
+        let count = CRT_ROWS * CRT_COLS;
+        let mut values = vec![false; count];
+
+        for (i, reading) in self.0.readings().take(count).enumerate() {
+            let value = reading.register;
+            let v = (i % CRT_COLS) as i32;
+            let pixel = (value - 1)..=(value + 1);
+            values[i] = pixel.contains(&v);
+        }
+
+        Ok(CrtState(values))
+    }
 }
 
 fn main() -> Result<()> {
@@ -161,6 +228,7 @@ fn main() -> Result<()> {
 
     let task = Task::parse(&lines)?;
     println!("part 1: {}", task.part1());
+    println!("part 2:\n{}\n", task.part2()?);
 
     Ok(())
 }
@@ -236,5 +304,40 @@ mod tests {
     fn part1_with_data() {
         let task = Task(program(include_str!("../data/input.txt")));
         assert_eq!(task.part1(), 12740);
+    }
+
+    fn crt(input: &str) -> CrtState {
+        input.parse::<CrtState>().unwrap()
+    }
+
+    #[test]
+    fn part2() {
+        let task = Task(program(include_str!("../data/example.txt")));
+
+        let expected = crt("\
+        ##..##..##..##..##..##..##..##..##..##..
+        ###...###...###...###...###...###...###.
+        ####....####....####....####....####....
+        #####.....#####.....#####.....#####.....
+        ######......######......######......####
+        #######.......#######.......#######.....");
+
+        assert_eq!(task.part2().unwrap(), expected);
+    }
+
+    #[test]
+    fn part2_with_data() {
+        let task = Task(program(include_str!("../data/input.txt")));
+
+        // RBPARAGF
+        let expected = crt("\
+        ###..###..###...##..###...##...##..####.
+        #..#.#..#.#..#.#..#.#..#.#..#.#..#.#....
+        #..#.###..#..#.#..#.#..#.#..#.#....###..
+        ###..#..#.###..####.###..####.#.##.#....
+        #.#..#..#.#....#..#.#.#..#..#.#..#.#....
+        #..#.###..#....#..#.#..#.#..#..###.#....");
+
+        assert_eq!(task.part2().unwrap(), expected);
     }
 }
