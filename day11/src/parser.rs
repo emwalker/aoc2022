@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::{collections::VecDeque, rc::Rc};
 
 use color_eyre::{eyre::eyre, Result};
 use nom::{
@@ -20,7 +20,7 @@ pub(crate) enum Operator {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Operand {
     Old,
-    Number(i32),
+    Number(u64),
 }
 
 #[derive(Debug)]
@@ -38,14 +38,14 @@ impl Expression {
 
 #[derive(Debug)]
 pub(crate) struct Test {
-    pub divisible_by: u32,
+    pub divisible_by: u64,
     pub branch_true: usize,
     pub branch_false: usize,
 }
 
 impl Test {
     #[allow(unused)]
-    pub fn new(divisible_by: u32, branch_true: usize, branch_false: usize) -> Self {
+    pub fn new(divisible_by: u64, branch_true: usize, branch_false: usize) -> Self {
         Self {
             divisible_by,
             branch_false,
@@ -64,12 +64,12 @@ pub(crate) struct Monkey {
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct MonkeyState {
-    pub items: VecDeque<i32>,
+    pub items: VecDeque<u64>,
     pub count: usize,
 }
 
 impl MonkeyState {
-    pub fn new(count: usize, items: Vec<i32>) -> Self {
+    pub fn new(count: usize, items: Vec<u64>) -> Self {
         Self {
             items: VecDeque::from(items),
             count,
@@ -84,7 +84,7 @@ pub(crate) struct Round(pub Vec<MonkeyState>);
 pub(crate) struct Notes {
     pub monkeys: Vec<Monkey>,
     #[allow(unused)]
-    pub first_round: Round,
+    pub first_round: Rc<Round>,
 }
 
 // Monkey 0:
@@ -92,24 +92,24 @@ fn parse_order(i: &str) -> IResult<&str, usize> {
     map(
         tuple((
             tag("Monkey "),
-            nom::character::complete::u32,
+            nom::character::complete::u64,
             tag(":"),
             multispace1,
         )),
-        |(_, i, _, _): (&str, u32, &str, &str)| i as _,
+        |(_, i, _, _): (&str, u64, &str, &str)| i as _,
     )(i)
 }
 
 // 79, 98
-fn parse_item_worry_levels(i: &str) -> IResult<&str, Vec<i32>> {
+fn parse_item_worry_levels(i: &str) -> IResult<&str, Vec<u64>> {
     separated_list1(
         tuple((tag(","), multispace0)),
-        nom::character::complete::i32,
+        nom::character::complete::u64,
     )(i)
 }
 
 // Starting items: 79, 98
-fn parse_items(i: &str) -> IResult<&str, Vec<i32>> {
+fn parse_items(i: &str) -> IResult<&str, Vec<u64>> {
     map(
         tuple((
             tag("Starting items: "),
@@ -128,8 +128,8 @@ fn parse_operator(i: &str) -> IResult<&str, Operator> {
     ))(i)
 }
 
-fn parse_number(i: &str) -> IResult<&str, i32> {
-    map(nom::character::complete::i32, |n| n as _)(i)
+fn parse_number(i: &str) -> IResult<&str, u64> {
+    map(nom::character::complete::u64, |n| n as _)(i)
 }
 
 fn parse_operand(i: &str) -> IResult<&str, Operand> {
@@ -161,10 +161,10 @@ fn parse_operation(i: &str) -> IResult<&str, Expression> {
 }
 
 // divisible by 23
-fn parse_condition(i: &str) -> IResult<&str, u32> {
+fn parse_condition(i: &str) -> IResult<&str, u64> {
     map(
         tuple((
-            preceded(tag("divisible by "), nom::character::complete::u32),
+            preceded(tag("divisible by "), nom::character::complete::u64),
             multispace1,
         )),
         |(c, _)| c,
@@ -180,7 +180,7 @@ fn parse_branch(i: &str) -> IResult<&str, usize> {
                 tag("If true: throw to monkey "),
                 tag("If false: throw to monkey "),
             )),
-            nom::character::complete::u32,
+            nom::character::complete::u64,
             multispace1,
         )),
         |(_, id, _)| id as _,
@@ -188,7 +188,7 @@ fn parse_branch(i: &str) -> IResult<&str, usize> {
 }
 
 fn parse_test(i: &str) -> IResult<&str, Test> {
-    type Components<'s> = (&'s str, u32, usize, usize);
+    type Components<'s> = (&'s str, u64, usize, usize);
 
     map(
         tuple((tag("Test: "), parse_condition, parse_branch, parse_branch)),
@@ -232,7 +232,7 @@ fn parse_notes(i: &str) -> IResult<&str, Notes> {
 
             Notes {
                 monkeys,
-                first_round: Round(states),
+                first_round: Rc::new(Round(states)),
             }
         },
     )(i)

@@ -2,21 +2,22 @@ use color_eyre::{self, Result};
 use std::{
     collections::BinaryHeap,
     io::{self, Read},
+    rc::Rc,
 };
 
 mod parser;
 use parser::{Notes, Operand, Operator, Round};
 
 impl parser::Expression {
-    fn evaluate(&self, n: i32) -> i32 {
+    fn evaluate(&self, n: u64, divisor: u64) -> u64 {
         let v = match self.operator {
             Operator::Add => self.lhs(n) + n,
             Operator::Multiply => self.lhs(n) * n,
         };
-        v / 3
+        v / divisor
     }
 
-    fn lhs(&self, n: i32) -> i32 {
+    fn lhs(&self, n: u64) -> u64 {
         match self.operand {
             Operand::Old => n,
             Operand::Number(v) => v,
@@ -25,8 +26,8 @@ impl parser::Expression {
 }
 
 impl parser::Test {
-    fn branch(&self, n: i32) -> usize {
-        let divisor = self.divisible_by as i32;
+    fn branch(&self, n: u64) -> usize {
+        let divisor = self.divisible_by;
         if n % divisor == 0 {
             self.branch_true
         } else {
@@ -37,11 +38,13 @@ impl parser::Test {
 
 struct RoundIter<'n> {
     notes: &'n Notes,
-    prev: Round,
+    prev: Rc<Round>,
+    divisor: u64,
+    modulo: u64,
 }
 
 impl<'n> Iterator for RoundIter<'n> {
-    type Item = Round;
+    type Item = Rc<Round>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let mut states = self.prev.0.clone();
@@ -50,23 +53,31 @@ impl<'n> Iterator for RoundIter<'n> {
             while !states[i].items.is_empty() {
                 if let Some(item) = states[i].items.pop_front() {
                     states[i].count += 1;
-                    let new_level = monkey.operation.evaluate(item);
+                    let new_level = monkey.operation.evaluate(item, self.divisor) % self.modulo;
                     let dest = monkey.test.branch(new_level);
                     states[dest].items.push_back(new_level);
                 }
             }
         }
 
-        self.prev = Round(states);
-        Some(self.prev.clone())
+        self.prev = Rc::new(Round(states));
+        Some(Rc::clone(&self.prev))
     }
 }
 
 impl parser::Notes {
-    fn rounds(&self) -> RoundIter {
+    fn rounds(&self, divisor: u64) -> RoundIter {
+        let modulo = self
+            .monkeys
+            .iter()
+            .map(|m| m.test.divisible_by)
+            .product::<u64>();
+
         RoundIter {
             notes: self,
-            prev: self.first_round.clone(),
+            prev: Rc::clone(&self.first_round),
+            divisor,
+            modulo,
         }
     }
 }
@@ -80,11 +91,11 @@ impl Task {
         Ok(Self(notes))
     }
 
-    fn monkey_business(&self) -> Option<usize> {
+    fn monkey_business(&self, divisor: u64, iterations: usize) -> Option<usize> {
         let mut counts = BinaryHeap::new();
-        let round = self.0.rounds().take(20).last()?;
+        let round = self.0.rounds(divisor).take(iterations).last()?;
 
-        for state in round.0.into_iter() {
+        for state in round.0.iter() {
             counts.push(state.count);
         }
 
@@ -105,8 +116,12 @@ fn main() -> Result<()> {
 
     let task = Task::parse(&input)?;
     println!(
-        "monkey business: {}",
-        task.monkey_business().unwrap_or_default()
+        "monkey business (3, 20): {}",
+        task.monkey_business(3, 20).unwrap_or_default()
+    );
+    println!(
+        "monkey business (1, 10,000): {}",
+        task.monkey_business(1, 10_000).unwrap_or_default()
     );
 
     Ok(())
@@ -126,7 +141,7 @@ mod tests {
     #[test]
     fn evaluation() {
         let test = Expression::new(Operator::Multiply, Operand::Number(19));
-        assert_eq!(500, test.evaluate(79));
+        assert_eq!(500, test.evaluate(79, 3));
     }
 
     #[test]
@@ -145,7 +160,7 @@ mod tests {
             vec![0, 1, 2, 3]
         );
 
-        let rounds = notes.rounds().take(20).collect_vec();
+        let rounds = notes.rounds(3).take(20).collect_vec();
 
         // Round 1
         let next = &rounds[0].0;
@@ -192,6 +207,7 @@ mod tests {
     #[test]
     fn monkey_business() {
         let task = task();
-        assert_eq!(10605, task.monkey_business().unwrap());
+        assert_eq!(10605, task.monkey_business(3, 20).unwrap());
+        assert_eq!(2713310158, task.monkey_business(1, 10_000).unwrap());
     }
 }
