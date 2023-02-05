@@ -222,6 +222,7 @@ impl Task {
 }
 
 fn main() -> Result<()> {
+    color_eyre::install()?;
     let mut input = String::new();
     io::stdin().read_to_string(&mut input)?;
     let lines = input.lines().map(str::to_owned).collect_vec();
