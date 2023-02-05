@@ -2,7 +2,6 @@ use color_eyre::{self, eyre::eyre, Report, Result};
 use itertools::Itertools;
 use std::{
     io::{self, Read},
-    iter::{Skip, StepBy},
     str::FromStr,
 };
 
@@ -82,8 +81,11 @@ impl Program {
         }
     }
 
-    fn signal_strength(&mut self) -> StepBy<Skip<SignalStrengthIter<'_>>> {
-        SignalStrengthIter(self.readings()).skip(19).step_by(40)
+    fn signal_strength(&mut self) -> impl Iterator<Item = i32> + '_ {
+        self.readings()
+            .skip(19)
+            .step_by(40)
+            .map(|r| r.signal_strength())
     }
 }
 
@@ -91,6 +93,12 @@ impl Program {
 struct Reading {
     cycle: usize,
     register: i32,
+}
+
+impl Reading {
+    fn signal_strength(&self) -> i32 {
+        self.register * self.cycle as i32
+    }
 }
 
 struct ReadingIter<'p> {
@@ -132,20 +140,6 @@ impl<'p> Iterator for ReadingIter<'p> {
     }
 }
 
-struct SignalStrengthIter<'p>(ReadingIter<'p>);
-
-impl<'p> Iterator for SignalStrengthIter<'p> {
-    type Item = i32;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if let Some(reading) = self.0.by_ref().next() {
-            return Some(reading.register * reading.cycle as i32);
-        }
-
-        None
-    }
-}
-
 struct Task(Program);
 
 impl Task {
@@ -176,11 +170,8 @@ mod tests {
     use super::*;
     use itertools::Itertools;
 
-    fn program() -> Program {
-        let lines = include_str!("../data/example.txt")
-            .lines()
-            .map(str::to_owned)
-            .collect_vec();
+    fn program(input: &str) -> Program {
+        let lines = input.lines().map(str::to_owned).collect_vec();
         Program::parse(&lines).unwrap()
     }
 
@@ -210,7 +201,7 @@ mod tests {
 
     #[test]
     fn register_value() {
-        let p = program();
+        let p = program(include_str!("../data/example.txt"));
         let readings = p.readings().take(20).collect_vec();
 
         assert_eq!(readings[0].cycle, 1);
@@ -227,7 +218,7 @@ mod tests {
 
     #[test]
     fn signal_strength() {
-        let mut p = program();
+        let mut p = program(include_str!("../data/example.txt"));
 
         assert_eq!(
             p.signal_strength().take(6).collect_vec(),
@@ -237,7 +228,13 @@ mod tests {
 
     #[test]
     fn part1() {
-        let task = Task(program());
+        let task = Task(program(include_str!("../data/example.txt")));
         assert_eq!(task.part1(), 13140);
+    }
+
+    #[test]
+    fn part1_with_data() {
+        let task = Task(program(include_str!("../data/input.txt")));
+        assert_eq!(task.part1(), 12740);
     }
 }
