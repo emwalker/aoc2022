@@ -50,6 +50,7 @@ struct Map {
     height: usize,
     start: Position,
     width: usize,
+    lowest: Vec<Position>,
 }
 
 impl Map {
@@ -57,6 +58,7 @@ impl Map {
         let mut grid = vec![];
         let mut start = None;
         let mut end = None;
+        let mut lowest = vec![];
 
         for (i, line) in input.trim().lines().enumerate() {
             let line = line.trim();
@@ -70,18 +72,24 @@ impl Map {
                     _ => return Err(eyre!("unknown elevation: {c}")),
                 };
 
+                let pos = Position(i as i32, j as i32);
+
+                if c == 'a' || c == 'S' {
+                    lowest.push(pos);
+                }
+
                 if cell == Cell::Start {
                     if start.is_some() {
                         return Err(eyre!("start already seen"));
                     }
-                    start = Some(Position(i as i32, j as i32));
+                    start = Some(pos);
                 }
 
                 if cell == Cell::End {
                     if end.is_some() {
                         return Err(eyre!("end already seen"));
                     }
-                    end = Some(Position(i as i32, j as i32));
+                    end = Some(pos);
                 }
 
                 row.push(cell);
@@ -102,6 +110,7 @@ impl Map {
 
         Ok(Self {
             end: end.unwrap(),
+            lowest,
             grid,
             height,
             start: start.unwrap(),
@@ -159,14 +168,12 @@ impl Task {
         Ok(Task(map))
     }
 
-    fn minimum_steps(&self) -> Option<i32> {
+    // Thanks to https://github.com/NickyMeuleman/scrapyard/blob/main/advent_of_code/2022/src/day_12.rs
+    fn mininium_steps(&self, u: Position) -> Option<i32> {
         let map = &self.0;
 
         let mut visited = HashSet::from([map.start]);
-        let mut pq = BinaryHeap::from([Step {
-            steps: 0,
-            pos: map.start,
-        }]);
+        let mut pq = BinaryHeap::from([Step { steps: 0, pos: u }]);
 
         while let Some(Step { steps, pos: u }) = pq.pop() {
             if u == map.end {
@@ -185,6 +192,19 @@ impl Task {
 
         None
     }
+
+    fn part1(&self) -> Option<i32> {
+        self.mininium_steps(self.0.start)
+    }
+
+    fn part2(&self) -> Option<i32> {
+        // TODO: Perhaps there's a more time-efficient approach?
+        self.0
+            .lowest
+            .iter()
+            .flat_map(|u| self.mininium_steps(*u))
+            .min()
+    }
 }
 
 fn main() -> Result<()> {
@@ -193,10 +213,8 @@ fn main() -> Result<()> {
     io::stdin().read_to_string(&mut input)?;
 
     let task = Task::parse(&input)?;
-    println!(
-        "minimum steps: {}",
-        task.minimum_steps().unwrap_or_default()
-    );
+    println!("part 1: {}", task.part1().unwrap_or_default());
+    println!("part 2: {}", task.part2().unwrap_or_default());
 
     Ok(())
 }
@@ -223,8 +241,14 @@ mod tests {
     }
 
     #[test]
-    fn test() {
+    fn part1() {
         let task = task();
-        assert_eq!(task.minimum_steps().unwrap(), 31);
+        assert_eq!(task.part1().unwrap(), 31);
+    }
+
+    #[test]
+    fn part2() {
+        let task = task();
+        assert_eq!(task.part2().unwrap(), 29);
     }
 }
