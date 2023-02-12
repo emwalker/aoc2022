@@ -8,7 +8,7 @@ use nom::{
     sequence::{delimited, tuple},
     Finish, IResult,
 };
-use std::{fmt::Debug, iter::zip, str::FromStr};
+use std::{fmt::Debug, str::FromStr};
 
 #[derive(Clone, Eq, PartialEq)]
 pub enum Item {
@@ -26,30 +26,29 @@ impl Debug for Item {
 }
 
 impl PartialOrd for Item {
+    // https://fasterthanli.me/series/advent-of-code-2022/part-13
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
+        match (self, other) {
+            (Self::Number(a), Self::Number(b)) => a.partial_cmp(b),
+            (l, r) => l.with_slice(|l| r.with_slice(|r| l.partial_cmp(r))),
+        }
     }
 }
 
 impl Ord for Item {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        fn cmp_number_and_list(num: &Item, list: &Item) -> std::cmp::Ordering {
-            Item::List(vec![num.to_owned()]).cmp(list)
-        }
+        self.partial_cmp(other).unwrap()
+    }
+}
 
-        match (self, other) {
-            (Item::Number(a), Item::Number(b)) => a.cmp(b),
-            (Item::Number(_), Item::List(_)) => cmp_number_and_list(self, other),
-            (Item::List(_), Item::Number(_)) => cmp_number_and_list(other, self).reverse(),
-
-            (Item::List(l1), Item::List(l2)) => {
-                for (a, b) in zip(l1.iter(), l2.iter()) {
-                    if !a.eq(b) {
-                        return a.cmp(b);
-                    }
-                }
-                l1.len().cmp(&l2.len())
-            }
+impl Item {
+    fn with_slice<T, F>(&self, f: F) -> T
+    where
+        F: FnOnce(&[Self]) -> T,
+    {
+        match self {
+            Self::List(list) => f(&list[..]),
+            Self::Number(n) => f(&[Self::Number(*n)]),
         }
     }
 }
