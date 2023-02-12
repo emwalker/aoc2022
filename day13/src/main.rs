@@ -1,9 +1,9 @@
+use color_eyre::{self, Result};
 use std::io::{self, Read};
 
-use color_eyre::{self, Result};
-
 mod parser;
-use parser::Signal;
+use itertools::Itertools;
+use parser::{Packet, Signal};
 
 struct Task {
     signal: Signal,
@@ -15,13 +15,27 @@ impl Task {
         Ok(Self { signal })
     }
 
-    fn part1(&self) -> usize {
+    fn sorted_pair_score(&self) -> usize {
         self.signal
             .0
             .iter()
             .enumerate()
             .map(|(i, pair)| (i + 1) * (pair.is_sorted() as usize))
             .sum()
+    }
+
+    fn decoder_key_indexes(&self) -> impl Iterator<Item = usize> + '_ {
+        self.signal
+            .iter()
+            .chain(Packet::dividers().iter())
+            .sorted()
+            .enumerate()
+            .filter(|(_i, p)| p.is_divider())
+            .map(|(i, _p)| (i + 1))
+    }
+
+    fn decoder_key(&self) -> usize {
+        self.decoder_key_indexes().product()
     }
 }
 
@@ -31,7 +45,8 @@ fn main() -> Result<()> {
     io::stdin().read_to_string(&mut input)?;
     let task = Task::parse(&input)?;
 
-    println!("sorted pair score: {}", task.part1());
+    println!("sorted pair score: {}", task.sorted_pair_score());
+    println!("decoder key: {}", task.decoder_key());
 
     Ok(())
 }
@@ -71,14 +86,21 @@ mod tests {
     }
 
     #[test]
-    fn part1() {
+    fn sorted_pair_score() {
         let task = task(input());
-        assert_eq!(task.part1(), 13);
+        assert_eq!(task.sorted_pair_score(), 13);
     }
 
     #[test]
     fn part1_given_input() {
         let task = task(include_str!("../data/input.txt"));
-        assert_eq!(task.part1(), 5675);
+        assert_eq!(task.sorted_pair_score(), 5675);
+    }
+
+    #[test]
+    fn decoder_key() {
+        let task = task(input());
+        assert_eq!(task.decoder_key_indexes().collect_vec(), vec![10, 14]);
+        assert_eq!(task.decoder_key(), 140);
     }
 }

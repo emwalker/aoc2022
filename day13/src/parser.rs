@@ -1,4 +1,5 @@
-use color_eyre::{eyre::eyre, Result};
+use color_eyre::{eyre::eyre, Report, Result};
+use lazy_static::lazy_static;
 use nom::{
     branch::alt,
     character::complete::{char, multispace0, multispace1},
@@ -7,7 +8,7 @@ use nom::{
     sequence::{delimited, tuple},
     Finish, IResult,
 };
-use std::{fmt::Debug, iter::zip};
+use std::{fmt::Debug, iter::zip, str::FromStr};
 
 #[derive(Clone, Eq, PartialEq)]
 pub enum Item {
@@ -19,7 +20,7 @@ impl Debug for Item {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Number(n) => f.write_fmt(format_args!("{n}")),
-            Self::List(list) => f.write_fmt(format_args!("{list:?}")),
+            Self::List(list) => f.debug_list().entries(list).finish(),
         }
     }
 }
@@ -68,6 +69,36 @@ impl Ord for Packet {
     }
 }
 
+impl FromStr for Packet {
+    type Err = Report;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        let packet = all_consuming(parse_packet)(s)
+            .finish()
+            .or(Err(eyre!("failed to parse input")))?
+            .1;
+        Ok(packet)
+    }
+}
+
+impl Packet {
+    pub fn dividers<'d>() -> &'d [Self] {
+        lazy_static! {
+            static ref DIVIDERS: Vec<Packet> = {
+                vec![
+                    Packet::from_str("[[2]]").unwrap(),
+                    Packet::from_str("[[6]]").unwrap(),
+                ]
+            };
+        }
+        &DIVIDERS
+    }
+
+    pub fn is_divider(&self) -> bool {
+        Self::dividers().contains(self)
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Pair {
     pub left: Packet,
@@ -82,6 +113,12 @@ impl Pair {
 
 #[derive(Clone, Debug)]
 pub struct Signal(pub Vec<Pair>);
+
+impl Signal {
+    pub fn iter(&self) -> impl Iterator<Item = &Packet> + '_ {
+        self.0.iter().flat_map(|pair| vec![&pair.left, &pair.right])
+    }
+}
 
 fn parse_number(i: &str) -> IResult<&str, Item> {
     map(nom::character::complete::u16, Item::Number)(i)
@@ -215,5 +252,12 @@ mod tests {
             "[[[10,[6,6],[8],[4,7,0],[8,10,8]],8],[[],3]]
              [[10,[[9,10,0],2]],[],[6,[[],3,[0,5]],3,5],[[[9]],1],[[5,[9,0,4,9],[5,7,8]]]]"
         ));
+    }
+
+    #[test]
+    fn dividers() {
+        assert!(parse_packet("[[2]]").unwrap().1.is_divider());
+        assert!(parse_packet("[[6]]").unwrap().1.is_divider());
+        assert!(!parse_packet("[2]").unwrap().1.is_divider());
     }
 }

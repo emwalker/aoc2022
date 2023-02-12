@@ -197,6 +197,8 @@ name = "day13"
 version = "0.1.0"
 dependencies = [
  "color-eyre",
+ "itertools",
+ "lazy_static",
  "nom",
 ]
 
