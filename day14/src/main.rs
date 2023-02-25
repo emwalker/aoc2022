@@ -45,6 +45,7 @@ impl Point {
     }
 }
 
+#[derive(Clone, Debug)]
 struct Polyline {
     points: Vec<Point>,
 }
@@ -104,6 +105,69 @@ impl Debug for Cell {
     }
 }
 
+struct Polylines(Vec<Polyline>);
+
+impl FromStr for Polylines {
+    type Err = Report;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        Ok(Self(
+            s.lines()
+                .map(Polyline::from_str)
+                .collect::<Result<Vec<Polyline>>>()?,
+        ))
+    }
+}
+
+impl Polylines {
+    fn with(&self, polyline: Polyline) -> Self {
+        let mut inner = self.0.clone();
+        inner.push(polyline);
+        Self(inner)
+    }
+
+    fn points(&self) -> impl Iterator<Item = Point> + '_ {
+        self.0
+            .iter()
+            .flat_map(|polyline| polyline.path_points())
+            .chain(std::iter::once(SPAWN_POINT))
+    }
+
+    fn dimensions(&self) -> (i32, i32, i32, i32) {
+        let (mut xmin, mut xmax, mut ymin, mut ymax) = (i32::MAX, i32::MIN, i32::MAX, i32::MIN);
+
+        for p in self.points() {
+            xmin = xmin.min(p.x);
+            xmax = xmax.max(p.x);
+            ymin = ymin.min(p.y);
+            ymax = ymax.max(p.y);
+        }
+
+        (xmin, xmax, ymin, ymax)
+    }
+
+    fn to_grid(&self) -> Result<Grid> {
+        let (xmin, xmax, ymin, ymax) = self.dimensions();
+        let origin = Point { x: xmin, y: ymin };
+        let height = (ymax - ymin + 1).try_into()?;
+        let width = (xmax - xmin + 1).try_into()?;
+        let cells = vec![Cell::Air; height * width];
+
+        let mut grid = Grid {
+            origin,
+            height,
+            width,
+            cells,
+        };
+
+        for p in self.points() {
+            *grid.cell_mut(p).unwrap() = Cell::Rock;
+        }
+
+        Ok(grid)
+    }
+}
+
 #[derive(Clone)]
 struct Grid {
     origin: Point,
@@ -116,44 +180,7 @@ impl FromStr for Grid {
     type Err = Report;
 
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        let polylines: Vec<_> = s
-            .lines()
-            .map(Polyline::from_str)
-            .collect::<Result<Vec<Polyline>>>()?;
-
-        let (mut xmin, mut xmax, mut ymin, mut ymax) = (i32::MAX, i32::MIN, i32::MAX, i32::MIN);
-
-        let points = || {
-            polylines
-                .iter()
-                .flat_map(|polyline| polyline.path_points())
-                .chain(std::iter::once(SPAWN_POINT))
-        };
-
-        for p in points() {
-            xmin = xmin.min(p.x);
-            xmax = xmax.max(p.x);
-            ymin = ymin.min(p.y);
-            ymax = ymax.max(p.y);
-        }
-
-        let origin = Point { x: xmin, y: ymin };
-        let height = (ymax - ymin + 1).try_into()?;
-        let width = (xmax - xmin + 1).try_into()?;
-        let cells = vec![Cell::Air; height * width];
-
-        let mut grid = Self {
-            origin,
-            height,
-            width,
-            cells,
-        };
-
-        for p in points() {
-            *grid.cell_mut(p).unwrap() = Cell::Rock;
-        }
-
-        Ok(grid)
+        s.parse::<Polylines>()?.to_grid()
     }
 }
 
@@ -199,6 +226,7 @@ impl Grid {
 
     fn simulation(&self) -> Simulation {
         Simulation {
+            filled: false,
             grains: vec![SPAWN_POINT],
             grid: self.to_owned(),
             settled: 0,
@@ -207,16 +235,22 @@ impl Grid {
 }
 
 struct Simulation {
-    grid: Grid,
+    filled: bool,
     grains: Vec<Point>,
+    grid: Grid,
     settled: usize,
 }
 
 impl Simulation {
     fn step(&mut self) -> usize {
-        let mut grains = self.grains.clone();
+        let mut grains = std::mem::take(&mut self.grains);
+
         let _ = grains
             .drain_filter(|grain| {
+                if self.filled {
+                    return true;
+                }
+
                 let down = *grain + Point { x: 0, y: 1 };
                 let down_left = *grain + Point { x: -1, y: 1 };
                 let down_right = *grain + Point { x: 1, y: 1 };
@@ -236,6 +270,11 @@ impl Simulation {
                     return true;
                 }
 
+                if self.grid.cell(*grain) == Some(Cell::Sand) {
+                    self.filled = true;
+                    return false;
+                }
+
                 self.settled += 1;
                 *self.grid.cell_mut(*grain).unwrap() = Cell::Sand;
                 // Remove
@@ -244,38 +283,63 @@ impl Simulation {
             .count();
 
         self.grains = grains;
-        self.grains.push(SPAWN_POINT);
+        if !self.filled {
+            self.grains.push(SPAWN_POINT);
+        }
+
         self.settled
     }
 }
 
 struct Task {
-    grid: Grid,
+    polylines: Polylines,
 }
 
 impl Task {
     fn parse(input: &str) -> Result<Self> {
-        let grid = input.parse::<Grid>()?;
-        Ok(Self { grid })
+        let polylines = input.parse::<Polylines>()?;
+        Ok(Self { polylines })
     }
 
     fn sand_at_rest(&self) -> usize {
-        let mut s = self.grid.simulation();
+        let grid = self.polylines.to_grid().unwrap();
+        self.count_sand(&grid, 100)
+    }
+
+    fn sand_with_floor(&self) -> usize {
+        let (xmin, xmax, _, ymax) = self.polylines.dimensions();
+
+        // Include the floor as a very long polyline
+        let floor = Polyline {
+            points: vec![
+                Point {
+                    x: xmin - 10_000,
+                    y: ymax + 2,
+                },
+                Point {
+                    x: xmax + 10_000,
+                    y: ymax + 2,
+                },
+            ],
+        };
+
+        let grid = self.polylines.with(floor).to_grid().unwrap();
+        self.count_sand(&grid, 10_000)
+    }
+
+    fn count_sand(&self, grid: &Grid, steps: usize) -> usize {
+        let mut s = grid.simulation();
         let mut curr = usize::MAX;
 
         // TODO: Figure out a more reliable approach to determining when to exit this loop
         while curr != s.settled {
             curr = s.settled;
-            for _ in 0..100 {
+            for _ in 0..steps {
                 s.step();
             }
         }
 
         s.settled
-    }
-
-    fn sand_on_floor(&self) -> usize {
-        self.sand_at_rest()
     }
 }
 
@@ -286,7 +350,7 @@ fn main() -> Result<()> {
 
     let task = Task::parse(&input)?;
     println!("settled sand: {}", task.sand_at_rest());
-    println!("settled sand with floor: {}", task.sand_on_floor());
+    println!("settled sand with floor: {}", task.sand_with_floor());
 
     Ok(())
 }
@@ -341,5 +405,12 @@ mod tests {
         let input = include_str!("../data/input.txt");
         let task = Task::parse(input).unwrap();
         assert_eq!(task.sand_at_rest(), 979);
+    }
+
+    #[test]
+    fn task2() {
+        let input = include_str!("../data/example.txt");
+        let task = Task::parse(input).unwrap();
+        assert_eq!(task.sand_with_floor(), 93);
     }
 }
