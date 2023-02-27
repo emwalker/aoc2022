@@ -1,4 +1,4 @@
-use std::ops::RangeInclusive;
+use std::ops::{BitAnd, BitOr, RangeInclusive};
 
 use color_eyre::{eyre::eyre, Result};
 use nom::{
@@ -25,13 +25,33 @@ pub struct Range(RangeInclusive<i32>);
 
 impl Ord for Range {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.0.end().cmp(other.0.end())
+        self.0.start().cmp(other.0.start())
     }
 }
 
 impl PartialOrd for Range {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
+    }
+}
+
+impl BitAnd for Range {
+    type Output = Self;
+
+    fn bitand(self, rhs: Self) -> Self::Output {
+        let (&s1, &e1) = (self.start(), self.end());
+        let (&s2, &e2) = (rhs.start(), rhs.end());
+        Self::new(s1.max(s2), e1.min(e2))
+    }
+}
+
+impl BitOr for Range {
+    type Output = Self;
+
+    fn bitor(self, rhs: Self) -> Self::Output {
+        let (&s1, &e1) = (self.start(), self.end());
+        let (&s2, &e2) = (rhs.start(), rhs.end());
+        Self::new(s1.min(s2), e1.max(e2))
     }
 }
 
@@ -42,12 +62,6 @@ impl Range {
 
     pub fn end(&self) -> &i32 {
         self.0.end()
-    }
-
-    pub fn merge(&self, other: &Self) -> Self {
-        let (&s1, &e1) = (self.start(), self.end());
-        let (&s2, &e2) = (other.start(), other.end());
-        Self::new(s1.min(s2), e1.max(e2))
     }
 
     pub fn overlap(&self, other: &Self) -> bool {
@@ -151,8 +165,8 @@ mod tests {
 
     #[test]
     fn merge() {
-        assert_eq!(Range::new(0, 1).merge(&Range::new(1, 2)), Range::new(0, 2));
-        assert_eq!(Range::new(0, 5).merge(&Range::new(1, 6)), Range::new(0, 6));
+        assert_eq!(Range::new(0, 1) | Range::new(1, 2), Range::new(0, 2));
+        assert_eq!(Range::new(0, 5) | Range::new(1, 6), Range::new(0, 6));
     }
 
     #[test]
