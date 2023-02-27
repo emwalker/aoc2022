@@ -1,13 +1,14 @@
+#![feature(binary_heap_into_iter_sorted)]
+
 use color_eyre::{self, Report, Result};
 use std::{
-    collections::HashSet,
+    collections::{BinaryHeap, HashSet, VecDeque},
     io::{self, Read},
-    ops::RangeInclusive,
     str::FromStr,
 };
 
 mod parser;
-use parser::Reading;
+use parser::{Range, Reading};
 
 struct Readings(Vec<Reading>);
 
@@ -45,20 +46,14 @@ impl FromStr for Task {
 
 impl Task {
     fn no_beacon(&self, y: i32) -> i32 {
-        let mut ranges: Vec<RangeInclusive<i32>> = vec![];
+        let mut ranges: BinaryHeap<Range> = BinaryHeap::new();
         let mut beacons = HashSet::new();
 
         for reading in self.readings.iter() {
             let (curr, beacon) = reading.range_at_y(y);
 
             if let Some(curr) = curr {
-                if let Some(prev) = ranges.pop() {
-                    let (&s1, &e1) = (prev.start(), prev.end());
-                    let (&s2, &e2) = (curr.start(), curr.end());
-                    ranges.push(s1.min(s2)..=e1.max(e2));
-                } else {
-                    ranges.push(curr);
-                }
+                ranges.push(curr);
             }
 
             if let Some(beacon) = beacon {
@@ -66,7 +61,25 @@ impl Task {
             }
         }
 
-        ranges.iter().map(|r| r.end() - r.start() + 1).sum::<i32>() - beacons.len() as i32
+        let mut merged = VecDeque::new();
+
+        while let Some(curr) = ranges.pop() {
+            if let Some(prev) = merged.pop_front() {
+                if curr.overlap(&prev) {
+                    merged.push_front(curr.merge(&prev));
+                } else if curr > prev {
+                    merged.push_front(prev);
+                    merged.push_front(curr);
+                } else {
+                    merged.push_front(curr);
+                    merged.push_front(prev);
+                }
+            } else {
+                merged.push_front(curr);
+            }
+        }
+
+        merged.iter().map(|r| r.end() - r.start() + 1).sum::<i32>() - beacons.len() as i32
     }
 }
 
