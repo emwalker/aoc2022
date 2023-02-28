@@ -4,28 +4,36 @@ use color_eyre::{eyre::eyre, Result};
 use nom::{
     bytes::complete::tag,
     combinator::{all_consuming, map},
-    sequence::tuple,
+    sequence::{preceded, separated_pair},
     Finish, IResult,
 };
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct Point {
-    x: i32,
-    y: i32,
+    x: i64,
+    y: i64,
 }
 
 impl Point {
-    pub fn new(x: i32, y: i32) -> Self {
+    pub fn new(x: i64, y: i64) -> Self {
         Self { x, y }
+    }
+
+    pub fn manhattan_distance(&self, other: &Self) -> i64 {
+        (self.x - other.x).abs() + (self.y - other.y).abs()
+    }
+
+    pub fn tuning_frequency(&self) -> i64 {
+        self.x * 4_000_000 + self.y
     }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Range(RangeInclusive<i32>);
+pub struct Range(pub RangeInclusive<i64>);
 
 impl Ord for Range {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.0.start().cmp(other.0.start())
+        self.0.start().cmp(other.0.start()).reverse()
     }
 }
 
@@ -56,11 +64,11 @@ impl BitOr for Range {
 }
 
 impl Range {
-    pub fn new(s: i32, e: i32) -> Self {
+    pub fn new(s: i64, e: i64) -> Self {
         Self(s..=e)
     }
 
-    pub fn end(&self) -> &i32 {
+    pub fn end(&self) -> &i64 {
         self.0.end()
     }
 
@@ -68,7 +76,7 @@ impl Range {
         self.start().max(other.start()) <= self.end().min(other.end())
     }
 
-    pub fn start(&self) -> &i32 {
+    pub fn start(&self) -> &i64 {
         self.0.start()
     }
 }
@@ -76,14 +84,14 @@ impl Range {
 pub struct Reading {
     pub sensor: Point,
     pub beacon: Point,
-    pub distance: i32,
+    pub distance: i64,
 }
 
-impl From<(i32, i32, i32, i32)> for Reading {
-    fn from((sx, sy, bx, by): (i32, i32, i32, i32)) -> Self {
+impl From<(i64, i64, i64, i64)> for Reading {
+    fn from((sx, sy, bx, by): (i64, i64, i64, i64)) -> Self {
         let sensor = Point::new(sx, sy);
         let beacon = Point::new(bx, by);
-        let distance = (bx - sx).abs() + (by - sy).abs();
+        let distance = sensor.manhattan_distance(&beacon);
 
         Self {
             sensor,
@@ -94,36 +102,40 @@ impl From<(i32, i32, i32, i32)> for Reading {
 }
 
 impl Reading {
-    pub fn range_at_y(&self, y: i32) -> (Option<Range>, Option<Point>) {
+    pub fn range_at_y(&self, y: i64) -> Option<Range> {
         let d = self.distance - (y - self.sensor.y).abs();
         if d <= 0 {
-            return (None, None);
+            return None;
         }
 
-        let beacon = if self.beacon.y == y {
-            Some(self.beacon)
-        } else {
-            None
-        };
-
         let r = Range::new(self.sensor.x - d, self.sensor.x + d);
-        (Some(r), beacon)
+        Some(r)
     }
+}
+
+fn parse_point(s: &str) -> IResult<&str, Point> {
+    map(
+        separated_pair(
+            preceded(tag("x="), nom::character::complete::i64),
+            tag(", "),
+            preceded(tag("y="), nom::character::complete::i64),
+        ),
+        |(x, y)| Point { x, y },
+    )(s)
 }
 
 pub fn parse_reading(s: &str) -> IResult<&str, Reading> {
     map(
-        tuple((
-            tag("Sensor at x="),
-            nom::character::complete::i32,
-            tag(", y="),
-            nom::character::complete::i32,
-            tag(": closest beacon is at x="),
-            nom::character::complete::i32,
-            tag(", y="),
-            nom::character::complete::i32,
-        )),
-        |(_, sx, _, sy, _, bx, _, by)| Reading::from((sx, sy, bx, by)),
+        separated_pair(
+            preceded(tag("Sensor at "), parse_point),
+            tag(": closest beacon is at "),
+            parse_point,
+        ),
+        |(sensor, beacon)| Reading {
+            sensor,
+            beacon,
+            distance: sensor.manhattan_distance(&beacon),
+        },
     )(s)
 }
 
@@ -149,18 +161,12 @@ mod tests {
     #[test]
     fn range() {
         let r = reading("Sensor at x=8, y=7: closest beacon is at x=2, y=10").unwrap();
-        assert_eq!(
-            r.range_at_y(10),
-            (Some(Range::new(2, 14)), Some(Point::new(2, 10)))
-        );
+        assert_eq!(r.range_at_y(10), Some(Range::new(2, 14)));
 
         let r = reading("Sensor at x=2, y=18: closest beacon is at x=-2, y=15").unwrap();
-        assert_eq!(
-            r.range_at_y(15),
-            (Some(Range::new(-2, 6)), Some(Point::new(-2, 15)))
-        );
-        assert_eq!(r.range_at_y(16), (Some(Range::new(-3, 7)), None));
-        assert_eq!(r.range_at_y(100), (None, None));
+        assert_eq!(r.range_at_y(15), Some(Range::new(-2, 6)),);
+        assert_eq!(r.range_at_y(16), Some(Range::new(-3, 7)));
+        assert_eq!(r.range_at_y(100), None);
     }
 
     #[test]

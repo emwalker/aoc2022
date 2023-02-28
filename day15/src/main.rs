@@ -1,11 +1,11 @@
 #![feature(binary_heap_into_iter_sorted)]
 
 use color_eyre::{self, eyre::eyre, Report, Result};
+use itertools::Itertools;
 use std::{
-    collections::{BinaryHeap, HashSet},
+    collections::BinaryHeap,
     io::{self, Read},
     str::FromStr,
-    vec,
 };
 
 mod parser;
@@ -45,72 +45,62 @@ impl FromStr for Task {
     }
 }
 
-const LENGTH: i32 = 4000000;
+const LENGTH: i64 = 4000000;
 
 impl Task {
-    fn coverage_at(&self, y: i32) -> (Vec<Range>, HashSet<Point>) {
+    fn clamped_ranges(&self, y: i64, x_range: Range) -> impl Iterator<Item = Range> {
+        self.ranges(y).filter_map(move |r| {
+            let r = r & x_range.clone();
+            if r.start() > r.end() {
+                None
+            } else {
+                Some(r)
+            }
+        })
+    }
+
+    fn ranges(&self, y: i64) -> impl Iterator<Item = Range> {
         let mut ranges: BinaryHeap<Range> = BinaryHeap::new();
-        let mut beacons = HashSet::new();
 
         for reading in self.readings.iter() {
-            let (curr, beacon) = reading.range_at_y(y);
-
-            if let Some(curr) = curr {
+            if let Some(curr) = reading.range_at_y(y) {
                 ranges.push(curr);
             }
-
-            if let Some(beacon) = beacon {
-                beacons.insert(beacon);
-            }
         }
 
-        let ranges: Vec<_> = ranges.into_iter_sorted().collect();
-        let mut merged = vec![];
-
-        for curr in ranges.into_iter().rev() {
-            if let Some(prev) = merged.pop() {
-                if curr.overlap(&prev) {
-                    merged.push(prev | curr);
-                } else {
-                    merged.push(prev);
-                    merged.push(curr);
-                }
+        ranges.into_iter_sorted().coalesce(|a, b| {
+            if a.overlap(&b) {
+                Ok(a | b)
             } else {
-                merged.push(curr);
+                Err((a, b))
             }
-        }
-
-        (merged, beacons)
+        })
     }
 
-    fn no_beacon(&self, y: i32) -> i32 {
-        let (ranges, beacons) = self.coverage_at(y);
-        self.count_elements(ranges.iter()) - beacons.len() as i32
+    fn no_beacon(&self, y: i64) -> i64 {
+        let ranges = self.ranges(y);
+        self.count_elements(ranges)
     }
 
-    fn count_elements<'r, R>(&self, ranges: R) -> i32
+    fn count_elements<R>(&self, ranges: R) -> i64
     where
-        R: Iterator<Item = &'r Range>,
+        R: Iterator<Item = Range>,
     {
-        ranges.map(|r| r.end() - r.start() + 1).sum::<i32>()
+        ranges.map(|r| r.end() - r.start()).sum::<i64>()
     }
 
-    fn tuning_frequency(&self, length: i32) -> Result<i128> {
-        let l = Range::new(0, length);
+    fn hidden_beacon(&self, length: i64) -> Result<Point> {
+        let mut y_range = Range::new(0, length);
+        let x_range = Range::new(0, length);
 
-        for y in 0..=length {
-            let (mut ranges, _) = self.coverage_at(y);
-
-            if ranges.iter().any(|r| r.clone() & l.clone() == l) {
-                continue;
-            }
-
-            let r = ranges.pop().ok_or(eyre!("expected a range"))?;
-            let x = r.start() - 1;
-            return Ok(x as i128 * LENGTH as i128 + y as i128);
-        }
-
-        Err(eyre!("no tuning frequency found"))
+        y_range
+            .0
+            .find_map(|y| {
+                self.clamped_ranges(y, x_range.clone())
+                    .nth(1)
+                    .map(|r| Point::new(r.start() - 1, y))
+            })
+            .ok_or(eyre!("no beacon found"))
     }
 }
 
@@ -121,7 +111,10 @@ fn main() -> Result<()> {
 
     let task = input.parse::<Task>()?;
     println!("positions with no beacon: {}", task.no_beacon(2000000));
-    println!("tuning frequency: {}", task.tuning_frequency(LENGTH)?);
+    println!(
+        "tuning frequency: {}",
+        task.hidden_beacon(LENGTH)?.tuning_frequency()
+    );
 
     Ok(())
 }
@@ -159,7 +152,7 @@ mod tests {
     fn coverage_at() {
         let input = include_str!("../data/example.txt");
         let task = input.parse::<Task>().unwrap();
-        let merged = task.coverage_at(11).0;
+        let merged = task.ranges(11).collect_vec();
         assert_eq!(merged, vec![Range::new(-3, 13), Range::new(15, 25)]);
     }
 
@@ -167,6 +160,17 @@ mod tests {
     fn tuning_frequency() {
         let input = include_str!("../data/example.txt");
         let task = input.parse::<Task>().unwrap();
-        assert_eq!(task.tuning_frequency(20).unwrap(), 56000011);
+        assert_eq!(task.hidden_beacon(20).unwrap().tuning_frequency(), 56000011);
+    }
+
+    // #[test]
+    #[allow(unused)]
+    fn tuning_frequency_with_input() {
+        let input = include_str!("../data/input.txt");
+        let task = input.parse::<Task>().unwrap();
+        assert_eq!(
+            task.hidden_beacon(LENGTH).unwrap().tuning_frequency(),
+            10621647166538
+        );
     }
 }
