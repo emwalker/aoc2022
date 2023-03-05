@@ -1,24 +1,76 @@
 // Mostly taken from https://fasterthanli.me/series/advent-of-code-2022/part-16
 use color_eyre::{self, Report, Result};
 use std::{
-    collections::{hash_map::Entry, HashMap, HashSet},
     io::{self, Read},
     str::FromStr,
 };
 
 mod parser;
-use parser::{Name, Output, Valve};
+use parser::{Name, Output, Valve, MAX_NAME};
+
+#[derive(Clone, Debug)]
+pub struct NameMap<T> {
+    values: [Option<T>; MAX_NAME],
+}
+
+impl<T> NameMap<T> {
+    pub fn new() -> Self {
+        Self {
+            values: std::array::from_fn(|_| None),
+        }
+    }
+
+    pub fn get(&self, name: Name) -> Option<&T> {
+        self.values[name.as_usize()].as_ref()
+    }
+
+    pub fn get_mut(&mut self, name: Name) -> Option<&mut T> {
+        self.values[name.as_usize()].as_mut()
+    }
+
+    pub fn insert(&mut self, name: Name, value: T) {
+        self.values[name.as_usize()] = Some(value);
+    }
+
+    pub fn contains(&self, name: Name) -> bool {
+        self.values[name.as_usize()].is_some()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.values.iter().all(|v| v.is_none())
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (Name, &T)> {
+        self.values
+            .iter()
+            .enumerate()
+            .filter_map(|(i, v)| v.as_ref().map(|v| (Name::from_usize(i), v)))
+    }
+
+    pub fn keys(&self) -> impl Iterator<Item = Name> + '_ {
+        self.values
+            .iter()
+            .enumerate()
+            .filter_map(|(i, v)| v.as_ref().map(|_| Name::from_usize(i)))
+    }
+}
+
+impl<T> Default for NameMap<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct Flow(u64);
 
-type Connections = HashMap<Name, (Path, Flow)>;
+type Connections = NameMap<(Path, Flow)>;
 
 type Path = Vec<(Name, Name)>;
 
 #[derive(Debug)]
 struct Network {
-    valves: HashMap<Name, (Valve, Connections)>,
+    valves: NameMap<(Valve, Connections)>,
 }
 
 impl TryFrom<Output> for Network {
@@ -26,17 +78,19 @@ impl TryFrom<Output> for Network {
 
     fn try_from(output: Output) -> std::result::Result<Self, Self::Error> {
         let mut network = Self {
-            valves: output
-                .iter()
-                .map(|valve| (valve.name, (valve.to_owned(), Connections::default())))
-                .collect(),
+            valves: Default::default(),
         };
-        let names = network.valves.keys().copied().collect::<Vec<_>>();
 
+        for valve in output.iter() {
+            network
+                .valves
+                .insert(valve.name, (valve.to_owned(), Default::default()));
+        }
+
+        let names = network.valves.keys().collect::<Vec<_>>();
         for name in names {
-            // fill in the connections as needed
             let conns = network.connections(name);
-            network.valves.get_mut(&name).unwrap().1 = conns;
+            network.valves.get_mut(name).unwrap().1 = conns;
         }
 
         Ok(network)
@@ -45,28 +99,26 @@ impl TryFrom<Output> for Network {
 
 impl Network {
     fn connections(&self, start: Name) -> Connections {
-        let mut current: HashMap<Name, (Path, Flow)> = Default::default();
-
+        let mut current = Connections::default();
         {
-            let valve = &self.valves[&start].0;
+            let valve = &self.valves.get(start).unwrap().0;
             current.insert(start, (vec![], Flow(valve.flow)));
         }
-
         let mut connections = current.clone();
 
         while !current.is_empty() {
-            let mut next: HashMap<Name, (Path, Flow)> = Default::default();
-            for (name, (path, _flow)) in current {
-                for link in self.valves[&name].0.links.iter().copied() {
-                    let valve = &self.valves[&link].0;
-                    if let Entry::Vacant(e) = connections.entry(link) {
+            let mut next = Connections::default();
+            for (name, (path, _flow)) in current.iter() {
+                for link in self.valves.get(name).unwrap().0.links.iter().copied() {
+                    let valve = &self.valves.get(link).unwrap().0;
+                    if !connections.contains(link) {
                         let conn_path: Path = path
                             .iter()
                             .copied()
                             .chain(std::iter::once((name, link)))
                             .collect();
                         let item = (conn_path.clone(), Flow(valve.flow));
-                        e.insert(item.clone());
+                        connections.insert(link, item.clone());
                         next.insert(link, item);
                     }
                 }
@@ -97,7 +149,7 @@ struct State<'n> {
     max_turns: u64,
     turn: u64,
     pressure: u64,
-    open_valves: HashSet<Name>,
+    open_valves: NameMap<()>,
 }
 
 impl State<'_> {
@@ -106,12 +158,12 @@ impl State<'_> {
         next.position = mv.target;
         next.turn += mv.cost();
         next.pressure += mv.pressure;
-        next.open_valves.insert(mv.target);
+        next.open_valves.insert(mv.target, ());
         next
     }
 
     fn moves(&self) -> impl Iterator<Item = Move> + '_ {
-        let (_valve, connections) = &self.network.valves[&self.position];
+        let (_valve, connections) = &self.network.valves.get(self.position).unwrap();
         connections.iter().filter_map(|(name, (path, flow))| {
             if self.open_valves.contains(name) {
                 return None;
@@ -127,7 +179,7 @@ impl State<'_> {
             let pressure = flow.0 * turns_spent_open;
             Some(Move {
                 pressure,
-                target: *name,
+                target: name,
                 path,
             })
         })
@@ -173,7 +225,7 @@ impl Task {
             max_turns,
             turn: 0,
             pressure: 0,
-            open_valves: HashSet::default(),
+            open_valves: NameMap::default(),
         };
 
         let state = state.apply_best_moves();

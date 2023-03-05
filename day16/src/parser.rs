@@ -1,4 +1,4 @@
-use std::{fmt::Debug};
+use std::fmt::Debug;
 
 use color_eyre::{eyre::eyre, Report, Result};
 use nom::{
@@ -12,7 +12,7 @@ use nom::{
 };
 
 #[derive(Clone, Copy, Eq, Hash, PartialEq)]
-pub struct Name([u8; 2]);
+pub struct Name(pub [u8; 2]);
 
 impl Debug for Name {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -26,6 +26,27 @@ impl TryFrom<&str> for Name {
 
     fn try_from(value: &str) -> std::result::Result<Self, Self::Error> {
         Ok(Self(value.as_bytes().try_into()?))
+    }
+}
+
+pub const MAX_NAME: usize = 26_usize.pow(2);
+
+impl Name {
+    /// Returns this name as a usize between 0 and 26**2
+    pub fn as_usize(self) -> usize {
+        let [a, b] = self.0;
+        debug_assert!(a.is_ascii_uppercase());
+        debug_assert!(b.is_ascii_uppercase());
+
+        (a - b'A') as usize * 26 + (b - b'A') as usize
+    }
+
+    /// Returns a name from a usize between 0 and 26**2
+    pub fn from_usize(index: usize) -> Self {
+        debug_assert!(index < MAX_NAME);
+        let a = (index / 26) as u8 + b'A';
+        let b = (index % 26) as u8 + b'A';
+        Self([a, b])
     }
 }
 
