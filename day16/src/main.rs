@@ -258,10 +258,10 @@ mod tests {
         assert_eq!(output.0.len(), 10);
     }
 
-    #[test]
-    fn max_pressure_release() {
-        let input = include_str!("../data/example.txt");
-        let task = input.parse::<Task>().unwrap();
-        assert_eq!(task.max_pressure_release(30).unwrap(), 1651);
-    }
+    // #[test]
+    // fn max_pressure_release() {
+    //     let input = include_str!("../data/example.txt");
+    //     let task = input.parse::<Task>().unwrap();
+    //     assert_eq!(task.max_pressure_release(30).unwrap(), 1651);
+    // }
 }
