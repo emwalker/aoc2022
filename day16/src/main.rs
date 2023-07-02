@@ -1,235 +1,259 @@
-// Mostly taken from https://fasterthanli.me/series/advent-of-code-2022/part-16
+// This is a graph searching problem the speed of whose solution depends upon adequately pruning
+// the search space.
+//
+// Let's try to get an optimal implementation using petgraph, even if it's not quite as fast as the
+// best solution found in the Reddit comments.
+//
+// Part 1
+//
+//   - Approach: Use Floyd-Warshall to compute the minimum distance/max flow between each pair of
+//     vertices.  Trim the vertices at which the flow rate is zero.  Use branch-and-bound to solve
+//     the traveling salesman problem (?).
+//   - Approach: Use Dijkstra to build up a matrix of shortest distances between valves with non-
+//     zero flows.  Depth-first search of all paths that we have time to visit.
+//
+// Part 2
+//
+//   - Approach: Compute the best pressure for each set of visited valves over 26 minutes.
+//     Combine the two solutions that visit a disjoint set of valves.
+//   - Use bitmask to compute mutually exclusive sets of valves
+//
+// Reference solutions
+//
+//   - https://www.reddit.com/r/adventofcode/comments/zn6k1l/comment/j0pewzt/. Rust, 2ms.
+//   - https://github.com/Crazytieguy/advent-of-code/blob/master/2022/src/bin/day16/main.rs
+//   - https://www.reddit.com/r/adventofcode/comments/zn6k1l/comment/j1piehq/. Rust, 8ms.
+//   - https://github.com/orlp/aoc2022/blob/master/src/bin/day16.rs
+//   - https://www.reddit.com/r/adventofcode/comments/zn6k1l/comment/j0gmocd/. Rust, dp, 180ms.
+//   - https://www.reddit.com/r/adventofcode/comments/zn6k1l/comment/j0oo5a9/. Rust.  Uses a bitmask
+//     to compute mutually exclusive paths of values for part 2.
+//   - https://www.reddit.com/r/adventofcode/comments/zn6k1l/comment/j0k26sn/. Rust. Use a dfs to
+//     find distances for part 1, recursive dfs to find optimal path, pruning the search if a path
+//     overlaps with the valves in a list provided)
+//   - https://www.reddit.com/r/adventofcode/comments/zn6k1l/comment/j0rsxjc/ (Rust, use Dijkstra
+//     to compute the shortest distances between each valve.  Filter out the valves with zero flow.
+//     Depth first search of all of the paths we have time to visit.)
+//
 use color_eyre::{self, Report, Result};
+use itertools::Itertools;
 use std::{
+    cmp::Reverse,
+    collections::HashMap,
     io::{self, Read},
     str::FromStr,
 };
 
 mod parser;
-use parser::{Name, Output, Valve, MAX_NAME};
+use parser::Valves;
 
-#[derive(Clone, Debug)]
-pub struct NameMap<T> {
-    values: [Option<T>; MAX_NAME],
+type Distances = Vec<Vec<u8>>;
+type Flows = Vec<u8>;
+
+#[derive(Default, Debug, Clone, Copy)]
+struct State {
+    visited: u64,
+    avoid: u64,
+    pressure_released: u16,
+    minutes_remaining: u8,
+    pos: usize,
 }
 
-impl<T> NameMap<T> {
-    pub fn new() -> Self {
+impl State {
+    fn new(pos: usize, minutes_remaining: u8) -> Self {
         Self {
-            values: std::array::from_fn(|_| None),
+            visited: 0,
+            avoid: 1 << pos,
+            pressure_released: 0,
+            minutes_remaining,
+            pos,
         }
     }
 
-    pub fn get(&self, name: Name) -> Option<&T> {
-        self.values[name.as_usize()].as_ref()
+    fn can_visit(self, i: usize) -> bool {
+        (self.visited | self.avoid) & (1 << i) == 0
     }
 
-    pub fn get_mut(&mut self, name: Name) -> Option<&mut T> {
-        self.values[name.as_usize()].as_mut()
-    }
-
-    pub fn insert(&mut self, name: Name, value: T) {
-        self.values[name.as_usize()] = Some(value);
-    }
-
-    pub fn contains(&self, name: Name) -> bool {
-        self.values[name.as_usize()].is_some()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.values.iter().all(|v| v.is_none())
-    }
-
-    pub fn iter(&self) -> impl Iterator<Item = (Name, &T)> {
-        self.values
+    fn branch<'a>(
+        self,
+        flows: &'a Flows,
+        dists: &'a Distances,
+    ) -> impl IntoIterator<Item = Self> + 'a {
+        dists[self.pos]
             .iter()
             .enumerate()
-            .filter_map(|(i, v)| v.as_ref().map(|v| (Name::from_usize(i), v)))
+            .filter(move |&(dest, _d)| self.can_visit(dest))
+            .filter_map(move |(dest, d)| {
+                let minutes_remaining = self.minutes_remaining.checked_sub(*d + 1)?;
+                let pressure_released =
+                    self.pressure_released + (minutes_remaining as u16 * flows[dest] as u16);
+
+                Some(Self {
+                    visited: self.visited | (1 << dest),
+                    avoid: self.avoid,
+                    pressure_released,
+                    minutes_remaining,
+                    pos: dest,
+                })
+            })
     }
 
-    pub fn keys(&self) -> impl Iterator<Item = Name> + '_ {
-        self.values
-            .iter()
-            .enumerate()
-            .filter_map(|(i, v)| v.as_ref().map(|_| Name::from_usize(i)))
+    fn bound(self, flows: &Flows, sorted_indexes: &[usize]) -> u16 {
+        let res = (0..=self.minutes_remaining)
+            .rev()
+            .step_by(2)
+            .skip(1)
+            .zip(
+                sorted_indexes
+                    .iter()
+                    .filter(|&&i| self.can_visit(i))
+                    .map(|&i| flows[i]),
+            )
+            .map(|(minutes, flow)| minutes as u16 * flow as u16)
+            .sum::<u16>();
+
+        res + self.pressure_released
     }
 }
 
-impl<T> Default for NameMap<T> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+// Use the Floyd-Warshall algorithm to compute minimum distances between each pair of vertices.
+fn shortest_distances(valves: &Valves) -> Distances {
+    let indexes = valves
+        .iter()
+        .enumerate()
+        .map(|(i, valve)| (&valve.name, i))
+        .collect::<HashMap<&String, _>>();
+    let n = valves.len();
+    let mut dists = vec![vec![u8::MAX; n]; n];
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct Flow(u64);
-
-type Connections = NameMap<(Path, Flow)>;
-
-type Path = Vec<(Name, Name)>;
-
-#[derive(Debug)]
-struct Network {
-    valves: NameMap<(Valve, Connections)>,
-}
-
-impl TryFrom<Output> for Network {
-    type Error = Report;
-
-    fn try_from(output: Output) -> std::result::Result<Self, Self::Error> {
-        let mut network = Self {
-            valves: Default::default(),
-        };
-
-        for valve in output.iter() {
-            network
-                .valves
-                .insert(valve.name, (valve.to_owned(), Default::default()));
+    for (i, valve) in valves.iter().enumerate() {
+        for link in valve.links.iter() {
+            let j = indexes[link];
+            dists[i][j] = 1;
         }
-
-        let names = network.valves.keys().collect::<Vec<_>>();
-        for name in names {
-            let conns = network.connections(name);
-            network.valves.get_mut(name).unwrap().1 = conns;
-        }
-
-        Ok(network)
     }
-}
 
-impl Network {
-    fn connections(&self, start: Name) -> Connections {
-        let mut current = Connections::default();
-        {
-            let valve = &self.valves.get(start).unwrap().0;
-            current.insert(start, (vec![], Flow(valve.flow)));
-        }
-        let mut connections = current.clone();
+    for i in 0..n {
+        dists[i][i] = 0;
+    }
 
-        while !current.is_empty() {
-            let mut next = Connections::default();
-            for (name, (path, _flow)) in current.iter() {
-                for link in self.valves.get(name).unwrap().0.links.iter().copied() {
-                    let valve = &self.valves.get(link).unwrap().0;
-                    if !connections.contains(link) {
-                        let conn_path: Path = path
-                            .iter()
-                            .copied()
-                            .chain(std::iter::once((name, link)))
-                            .collect();
-                        let item = (conn_path.clone(), Flow(valve.flow));
-                        connections.insert(link, item.clone());
-                        next.insert(link, item);
-                    }
+    for k in 0..n {
+        for i in 0..n {
+            for j in 0..n {
+                let d = dists[i][k].saturating_add(dists[k][j]);
+                if dists[i][j] > d {
+                    dists[i][j] = d;
                 }
             }
-            current = next;
         }
-
-        connections
     }
+
+    dists
 }
 
-struct Move<'p> {
-    pressure: u64,
-    target: Name,
-    path: &'p Path,
-}
-
-impl Move<'_> {
-    fn cost(&self) -> u64 {
-        1 + self.path.len() as u64
+fn branch_and_bound(
+    flows: &Flows,
+    sorted_indexes: &[usize],
+    dists: &Distances,
+    state: State,
+    max_for_visited: &mut [u16],
+    ans: &mut u16,
+    filter_bound: impl Fn(u16, u16) -> bool + Copy,
+) {
+    if let Some(curr_max) = max_for_visited.get_mut(state.visited as usize) {
+        *curr_max = state.pressure_released.max(*curr_max);
     }
-}
+    *ans = state.pressure_released.max(*ans);
 
-#[derive(Clone, Debug)]
-struct State<'n> {
-    network: &'n Network,
-    position: Name,
-    max_turns: u64,
-    turn: u64,
-    pressure: u64,
-    open_valves: NameMap<()>,
-}
+    let pairs = state
+        .branch(flows, dists)
+        .into_iter()
+        .map(|state| (state.bound(flows, sorted_indexes), state))
+        .filter(|&(bound, _)| filter_bound(bound, *ans))
+        .sorted_unstable_by_key(|(bound, _)| Reverse(*bound))
+        .collect::<Vec<_>>();
 
-impl State<'_> {
-    fn apply(&self, mv: &Move) -> Self {
-        let mut next = self.clone();
-        next.position = mv.target;
-        next.turn += mv.cost();
-        next.pressure += mv.pressure;
-        next.open_valves.insert(mv.target, ());
-        next
-    }
-
-    fn moves(&self) -> impl Iterator<Item = Move> + '_ {
-        let (_valve, connections) = &self.network.valves.get(self.position).unwrap();
-        connections.iter().filter_map(|(name, (path, flow))| {
-            if self.open_valves.contains(name) {
-                return None;
-            }
-
-            if flow.0 == 0 {
-                return None;
-            }
-
-            let travel_turns = path.len() as u64;
-            let open_turns = 1_u64;
-            let turns_spent_open = self.turns_left().checked_sub(travel_turns + open_turns)?;
-            let pressure = flow.0 * turns_spent_open;
-            Some(Move {
-                pressure,
-                target: name,
-                path,
-            })
-        })
-    }
-
-    fn turns_left(&self) -> u64 {
-        self.max_turns - self.turn
-    }
-
-    fn apply_best_moves(&self) -> Self {
-        let mut best_state = self.clone();
-
-        for mv in self.moves() {
-            let next = self.apply(&mv).apply_best_moves();
-            if next.pressure > best_state.pressure {
-                best_state = next;
-            }
+    for (bound, branch) in pairs {
+        if filter_bound(bound, *ans) {
+            branch_and_bound(
+                flows,
+                sorted_indexes,
+                dists,
+                branch,
+                max_for_visited,
+                ans,
+                filter_bound,
+            );
         }
-
-        best_state
     }
 }
 
 struct Task {
-    network: Network,
+    flows: Flows,
+    distances: Distances,
+    sorted_indexes: Vec<usize>,
+    start: usize,
 }
 
 impl FromStr for Task {
     type Err = Report;
 
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        let output = parser::parse(s)?;
-        let network: Network = output.try_into()?;
-        Ok(Self { network })
+        let valves = parser::parse(s)?;
+        let distances = shortest_distances(&valves);
+        let flows = valves.iter().map(|valve| valve.flow).collect::<Flows>();
+
+        // The number of valves must not exceed the size of our bit vectors
+        assert!(valves.len() < 64);
+
+        let indexes = valves
+            .iter()
+            .enumerate()
+            .filter_map(|(i, valve)| {
+                if valve.name == "AA" || valve.flow > 0 {
+                    Some(i)
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<usize>>();
+
+        let sorted_indexes = indexes
+            .iter()
+            .sorted_unstable_by_key(|&&i| Reverse(flows[i]))
+            .copied()
+            .collect::<Vec<usize>>();
+
+        let start = valves
+            .iter()
+            .enumerate()
+            .find(|(_, valve)| valve.name == "AA")
+            .unwrap()
+            .0;
+
+        Ok(Self {
+            flows,
+            distances,
+            sorted_indexes,
+            start,
+        })
     }
 }
 
 impl Task {
-    fn max_pressure_release(&self, max_turns: u64) -> Result<u64> {
-        let state = State {
-            network: &self.network,
-            position: "AA".try_into()?,
-            max_turns,
-            turn: 0,
-            pressure: 0,
-            open_valves: NameMap::default(),
-        };
+    fn part1(&self) -> Result<u16> {
+        let mut ans = 0;
 
-        let state = state.apply_best_moves();
-        Ok(state.pressure)
+        branch_and_bound(
+            &self.flows,
+            &self.sorted_indexes,
+            &self.distances,
+            State::new(self.start, 30),
+            &mut [],
+            &mut ans,
+            |bound, best| bound > best,
+        );
+
+        Ok(ans)
     }
 }
 
@@ -240,8 +264,8 @@ fn main() -> Result<()> {
 
     let task = input.parse::<Task>()?;
     println!(
-        "pressure that can be released: {}",
-        task.max_pressure_release(30)?
+        "part 1: max pressure that can be released: {}",
+        task.part1()?
     );
 
     Ok(())
@@ -254,14 +278,24 @@ mod tests {
     #[test]
     fn parsing() {
         let input = include_str!("../data/example.txt");
-        let output = parser::parse(input).unwrap();
-        assert_eq!(output.0.len(), 10);
+        let valves = parser::parse(input).unwrap();
+        assert_eq!(valves.len(), 10);
     }
 
-    // #[test]
-    // fn max_pressure_release() {
-    //     let input = include_str!("../data/example.txt");
-    //     let task = input.parse::<Task>().unwrap();
-    //     assert_eq!(task.max_pressure_release(30).unwrap(), 1651);
-    // }
+    #[test]
+    fn distances() {
+        let input = include_str!("../data/example.txt");
+        let valves = parser::parse(input).unwrap();
+        let dists = shortest_distances(&valves);
+        assert_eq!(dists[0][0], 0);
+        assert_eq!(dists[0][1], 1);
+        assert_eq!(dists[2][5], 3);
+    }
+
+    #[test]
+    fn max_pressure_release() {
+        let input = include_str!("../data/example.txt");
+        let task = input.parse::<Task>().unwrap();
+        assert_eq!(task.part1().unwrap(), 1651);
+    }
 }
