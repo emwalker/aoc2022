@@ -1,9 +1,6 @@
 // This is a graph searching problem the speed of whose solution depends upon adequately pruning
 // the search space.
 //
-// Let's try to get an optimal implementation using petgraph, even if it's not quite as fast as the
-// best solution found in the Reddit comments.
-//
 // Part 1
 //
 //   - Approach: Use Floyd-Warshall to compute the minimum distance/max flow between each pair of
@@ -51,8 +48,8 @@ type Flows = Vec<u8>;
 
 #[derive(Default, Debug, Clone, Copy)]
 struct State {
-    visited: u64,
-    avoid: u64,
+    visited: u16,
+    avoid: u16,
     pressure_released: u16,
     minutes_remaining: u8,
     pos: usize,
@@ -195,36 +192,45 @@ impl FromStr for Task {
 
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         let valves = parser::parse(s)?;
-        let dists = shortest_distances(&valves);
-        let flows = valves.iter().map(|valve| valve.flow).collect::<Flows>();
+        let full_dists = shortest_distances(&valves);
 
-        // The number of valves must not exceed the size of our bit vectors
-        assert!(valves.len() < 64);
-
-        let indexes = valves
+        let interesting_subset = valves
             .iter()
             .enumerate()
-            .filter_map(|(i, valve)| {
-                if valve.name == "AA" || valve.flow > 0 {
-                    Some(i)
-                } else {
-                    None
-                }
+            .filter(|&(_i, valve)| valve.name == "AA" || valve.flow > 0)
+            .map(|(i, _valve)| i)
+            .collect::<Vec<_>>();
+
+        // The number of valves must not exceed the size of our u16 bit vectors.
+        // Using u32 bit vectors causes the search space to be too large.
+        assert!(interesting_subset.len() <= 16);
+
+        let flows = interesting_subset
+            .iter()
+            .map(|&i| valves[i].flow)
+            .collect::<Vec<_>>();
+
+        let dists = interesting_subset
+            .iter()
+            .map(|&i| {
+                interesting_subset
+                    .iter()
+                    .map(|&j| full_dists[i][j])
+                    .collect()
             })
-            .collect::<Vec<usize>>();
+            .collect::<Vec<_>>();
 
-        let sorted_indexes = indexes
-            .iter()
-            .sorted_unstable_by_key(|&&i| Reverse(flows[i]))
-            .copied()
-            .collect::<Vec<usize>>();
-
-        let start = valves
+        let sorted_indexes = flows
             .iter()
             .enumerate()
-            .find(|(_, valve)| valve.name == "AA")
-            .unwrap()
-            .0;
+            .sorted_unstable_by_key(|&(_, &flow)| Reverse(flow))
+            .map(|(i, _)| i)
+            .collect::<Vec<usize>>();
+
+        let start = interesting_subset
+            .iter()
+            .position(|&i| valves[i].name == "AA")
+            .expect("an AA valve");
 
         let network = Network {
             flows,
@@ -249,6 +255,44 @@ impl Task {
 
         Ok(ans)
     }
+
+    fn part2(&self) -> Result<u16> {
+        let mut max_for_visited = vec![0; u16::MAX as usize];
+
+        self.network.branch_and_bound(
+            State::new(self.start, 26),
+            &mut max_for_visited,
+            &mut 0,
+            // TODO: Figure out why we can't use the previous filter function
+            |bound, best| bound > (best * 3 / 4),
+        );
+
+        let sorted_max = max_for_visited
+            .into_iter()
+            .enumerate()
+            .filter(|&(_, max)| max > 0)
+            .map(|(i, max)| (i as u16, max))
+            .sorted_unstable_by_key(|&(_, max)| Reverse(max))
+            .collect::<Vec<_>>();
+
+        let mut ans = 0;
+
+        for (i, &(elf_visited, elf_max)) in sorted_max.iter().enumerate() {
+            for &(ele_visited, ele_max) in &sorted_max[i + 1..] {
+                let score = elf_max + ele_max;
+                if score <= ans {
+                    break;
+                }
+
+                if elf_visited & ele_visited == 0 {
+                    ans = score;
+                    break;
+                }
+            }
+        }
+
+        Ok(ans)
+    }
 }
 
 fn main() -> Result<()> {
@@ -260,6 +304,11 @@ fn main() -> Result<()> {
     println!(
         "part 1: max pressure that can be released: {}",
         task.part1()?
+    );
+
+    println!(
+        "part 2: max pressure with the help of an elephant: {}",
+        task.part2()?
     );
 
     Ok(())
@@ -291,5 +340,20 @@ mod tests {
         let input = include_str!("../data/example.txt");
         let task = input.parse::<Task>().unwrap();
         assert_eq!(task.part1().unwrap(), 1651);
+    }
+
+    #[test]
+    fn with_elephant() {
+        let input = include_str!("../data/example.txt");
+        let task = input.parse::<Task>().unwrap();
+        assert_eq!(task.part2().unwrap(), 1707);
+    }
+
+    #[test]
+    fn input_values() {
+        let input = include_str!("../data/input.txt");
+        let task = input.parse::<Task>().unwrap();
+        assert_eq!(task.part1().unwrap(), 2359);
+        assert_eq!(task.part2().unwrap(), 2999);
     }
 }
