@@ -73,19 +73,15 @@ impl State {
         (self.visited | self.avoid) & (1 << i) == 0
     }
 
-    fn branch<'a>(
-        self,
-        flows: &'a Flows,
-        dists: &'a Distances,
-    ) -> impl IntoIterator<Item = Self> + 'a {
-        dists[self.pos]
+    fn branch(self, net: &Network) -> impl IntoIterator<Item = Self> + '_ {
+        net.dists[self.pos]
             .iter()
             .enumerate()
             .filter(move |&(dest, _d)| self.can_visit(dest))
             .filter_map(move |(dest, d)| {
                 let minutes_remaining = self.minutes_remaining.checked_sub(*d + 1)?;
                 let pressure_released =
-                    self.pressure_released + (minutes_remaining as u16 * flows[dest] as u16);
+                    self.pressure_released + (minutes_remaining as u16 * net.flows[dest] as u16);
 
                 Some(Self {
                     visited: self.visited | (1 << dest),
@@ -97,17 +93,19 @@ impl State {
             })
     }
 
-    fn bound(self, flows: &Flows, sorted_indexes: &[usize]) -> u16 {
+    fn bound(self, net: &Network) -> u16 {
+        let sorted_flows = net
+            .sorted_indexes
+            .iter()
+            .filter(|&&i| self.can_visit(i))
+            .map(|&i| net.flows[i]);
+
+        // TODO: Figure out what is going on here.
         let res = (0..=self.minutes_remaining)
             .rev()
             .step_by(2)
             .skip(1)
-            .zip(
-                sorted_indexes
-                    .iter()
-                    .filter(|&&i| self.can_visit(i))
-                    .map(|&i| flows[i]),
-            )
+            .zip(sorted_flows)
             .map(|(minutes, flow)| minutes as u16 * flow as u16)
             .sum::<u16>();
 
@@ -125,6 +123,7 @@ fn shortest_distances(valves: &Valves) -> Distances {
     let n = valves.len();
     let mut dists = vec![vec![u8::MAX; n]; n];
 
+    // Valves are one step away from their neighbors
     for (i, valve) in valves.iter().enumerate() {
         for link in valve.links.iter() {
             let j = indexes[link];
@@ -132,8 +131,9 @@ fn shortest_distances(valves: &Valves) -> Distances {
         }
     }
 
-    for i in 0..n {
-        dists[i][i] = 0;
+    // Valves are zero steps away from themselves
+    for (i, row) in dists.iter_mut().enumerate() {
+        row[i] = 0;
     }
 
     for k in 0..n {
@@ -150,47 +150,43 @@ fn shortest_distances(valves: &Valves) -> Distances {
     dists
 }
 
-fn branch_and_bound(
-    flows: &Flows,
-    sorted_indexes: &[usize],
-    dists: &Distances,
-    state: State,
-    max_for_visited: &mut [u16],
-    ans: &mut u16,
-    filter_bound: impl Fn(u16, u16) -> bool + Copy,
-) {
-    if let Some(curr_max) = max_for_visited.get_mut(state.visited as usize) {
-        *curr_max = state.pressure_released.max(*curr_max);
-    }
-    *ans = state.pressure_released.max(*ans);
+struct Network {
+    flows: Flows,
+    sorted_indexes: Vec<usize>,
+    dists: Distances,
+}
 
-    let pairs = state
-        .branch(flows, dists)
-        .into_iter()
-        .map(|state| (state.bound(flows, sorted_indexes), state))
-        .filter(|&(bound, _)| filter_bound(bound, *ans))
-        .sorted_unstable_by_key(|(bound, _)| Reverse(*bound))
-        .collect::<Vec<_>>();
+impl Network {
+    fn branch_and_bound(
+        &self,
+        state: State,
+        max_for_visited: &mut [u16],
+        ans: &mut u16,
+        filter_bound: impl Fn(u16, u16) -> bool + Copy,
+    ) {
+        if let Some(curr_max) = max_for_visited.get_mut(state.visited as usize) {
+            *curr_max = state.pressure_released.max(*curr_max);
+        }
+        *ans = state.pressure_released.max(*ans);
 
-    for (bound, branch) in pairs {
-        if filter_bound(bound, *ans) {
-            branch_and_bound(
-                flows,
-                sorted_indexes,
-                dists,
-                branch,
-                max_for_visited,
-                ans,
-                filter_bound,
-            );
+        let pairs = state
+            .branch(self)
+            .into_iter()
+            .map(|state| (state.bound(self), state))
+            .filter(|&(bound, _)| filter_bound(bound, *ans))
+            .sorted_unstable_by_key(|(bound, _)| Reverse(*bound))
+            .collect::<Vec<_>>();
+
+        for (bound, branch) in pairs {
+            if filter_bound(bound, *ans) {
+                self.branch_and_bound(branch, max_for_visited, ans, filter_bound);
+            }
         }
     }
 }
 
 struct Task {
-    flows: Flows,
-    distances: Distances,
-    sorted_indexes: Vec<usize>,
+    network: Network,
     start: usize,
 }
 
@@ -199,7 +195,7 @@ impl FromStr for Task {
 
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         let valves = parser::parse(s)?;
-        let distances = shortest_distances(&valves);
+        let dists = shortest_distances(&valves);
         let flows = valves.iter().map(|valve| valve.flow).collect::<Flows>();
 
         // The number of valves must not exceed the size of our bit vectors
@@ -230,12 +226,13 @@ impl FromStr for Task {
             .unwrap()
             .0;
 
-        Ok(Self {
+        let network = Network {
             flows,
-            distances,
+            dists,
             sorted_indexes,
-            start,
-        })
+        };
+
+        Ok(Self { network, start })
     }
 }
 
@@ -243,10 +240,7 @@ impl Task {
     fn part1(&self) -> Result<u16> {
         let mut ans = 0;
 
-        branch_and_bound(
-            &self.flows,
-            &self.sorted_indexes,
-            &self.distances,
+        self.network.branch_and_bound(
             State::new(self.start, 30),
             &mut [],
             &mut ans,
