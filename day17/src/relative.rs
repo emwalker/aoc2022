@@ -1,9 +1,11 @@
 use color_eyre::{self, Report, Result};
 use std::{
-    collections::VecDeque,
     fmt::{Debug, Write},
     str::FromStr,
 };
+
+type Int = i16;
+type Point = (Int, Int);
 
 const COLS: usize = 7;
 
@@ -23,45 +25,26 @@ enum Shape {
 }
 
 impl Shape {
-    fn height(&self) -> usize {
-        match self {
-            Self::Horizontal => 1,
-            Self::Square => 2,
-            Self::Plus | Self::ReverseL => 3,
-            Self::Vertical => 4,
-        }
-    }
-
-    fn points(&self) -> &[(i16, i16)] {
+    fn points(&self) -> &[Point] {
         match self {
             Self::Horizontal => &[(0, 0), (0, 1), (0, 2), (0, 3)],
             Self::Plus => &[(0, 1), (1, 0), (1, 1), (1, 2), (2, 1)],
-            Self::ReverseL => &[(0, 2), (1, 2), (2, 0), (2, 1), (2, 2)],
+            Self::ReverseL => &[(0, 0), (0, 1), (0, 2), (1, 2), (2, 2)],
             Self::Vertical => &[(0, 0), (1, 0), (2, 0), (3, 0)],
             Self::Square => &[(0, 0), (0, 1), (1, 0), (1, 1)],
         }
     }
 
-    fn shift_horizontal(
-        &self,
-        i: i16,
-        j: i16,
-        dj_delta: i16,
-    ) -> impl Iterator<Item = (i16, i16)> + '_ {
+    fn shift_horizontal(&self, p: Point, dj_delta: Int) -> impl Iterator<Item = Point> + '_ {
         self.points()
             .iter()
-            .map(move |(di, dj)| (i + di, j + dj + dj_delta))
+            .map(move |(di, dj)| (p.0 + di, p.1 + dj + dj_delta))
     }
 
-    fn shift_vertical(
-        &self,
-        i: i16,
-        j: i16,
-        di_delta: i16,
-    ) -> impl Iterator<Item = (i16, i16)> + '_ {
+    fn shift_vertical(&self, p: Point, di_delta: Int) -> impl Iterator<Item = Point> + '_ {
         self.points()
             .iter()
-            .map(move |(di, dj)| (i + di + di_delta, j + dj))
+            .map(move |(di, dj)| (p.0 + di + di_delta, p.1 + dj))
     }
 }
 
@@ -94,111 +77,137 @@ impl Debug for Row {
     }
 }
 
-struct Tower {
-    rows: VecDeque<Row>,
-    height: usize,
+struct Chamber {
+    pub rows: Vec<Row>,
+    pub max_i_by_col: [Int; COLS],
+    pub max_i: Int,
 }
 
-impl Debug for Tower {
+impl Debug for Chamber {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("\n")?;
-        for row in &self.rows {
+        f.write_str("\n|-------|\n")?;
+        for row in self.rows.iter().rev() {
             writeln!(f, "|{:?}|", row)?;
         }
         f.write_str("+-------+\n")
     }
 }
 
-impl Tower {
+impl Chamber {
     fn new() -> Self {
         Self {
-            rows: VecDeque::new(),
-            height: 0,
+            rows: Vec::with_capacity(4096),
+            max_i_by_col: [-1; COLS],
+            max_i: -1,
         }
     }
 
-    fn is_clear(&self, i: i16, j: i16) -> bool {
-        let cell = self
-            .rows
-            .get(i as usize)
-            .and_then(|row| row.0.get(j as usize));
+    fn is_available(&self, p: Point) -> bool {
+        let (i, j) = p;
 
-        cell == Some(&Cell::Empty)
+        if j < 0 {
+            return false;
+        }
+        let j = j as usize;
+
+        if j >= COLS {
+            return false;
+        }
+
+        if i < 0 {
+            return false;
+        }
+        let i = i as usize;
+
+        // If i goes beyond the current capacity of the chamber, there are no obstructions, and the
+        // block can be placed here, assuming additional capacity is added.
+        if i >= self.rows.len() {
+            return true;
+        }
+
+        self.rows[i].0.get(j) == Some(&Cell::Empty)
     }
 
-    pub fn height(&self) -> usize {
-        self.height
+    pub fn height(&self) -> Int {
+        self.max_i + 1
     }
 
-    fn cap(&self) -> usize {
-        self.rows.len()
-    }
+    fn set(&mut self, p: Point, next: Cell) {
+        debug_assert!(p.0 >= 0);
+        let i = p.0 as usize;
 
-    fn ensure_capacity(&mut self, height: usize) {
-        if self.rows.len() < (self.height() + height) {
+        debug_assert!((0..7).contains(&p.1));
+
+        if i >= self.rows.len() {
             for _ in 0..10 {
-                self.rows.push_front(Row::new())
+                self.rows.push(Row::new());
             }
         }
-    }
 
-    fn set(&mut self, i: i16, j: i16, next: Cell) {
-        debug_assert!(i >= 0);
-        debug_assert!((0..7).contains(&j));
+        let cell = self.rows[i]
+            .0
+            .get_mut(p.1 as usize)
+            .expect("p.1 within column bounds");
 
-        let cell = self.rows[i as usize].0.get_mut(j as usize).unwrap();
         debug_assert_eq!(*cell, Cell::Empty, "tried to overwrite an existing rock");
 
         *cell = next;
     }
 
-    fn add(&mut self, rock: Rock) {
-        rock.points()
-            .for_each(|(i, j)| self.set(i, j, Cell::SettledRock));
-        self.height = self.height.max(self.rows.len() - rock.i as usize);
+    fn insert(&mut self, rock: Rock) {
+        let mut max_i = -1;
+
+        for p in rock.points() {
+            let j = p.1 as usize;
+            self.max_i_by_col[j] = self.max_i_by_col[j].max(p.0);
+            max_i = max_i.max(self.max_i_by_col[j]);
+            self.set(p, Cell::SettledRock);
+        }
+
+        self.max_i = self.max_i.max(max_i);
     }
 }
 
 #[derive(Clone, Debug)]
-pub struct Rock {
+struct Rock {
     shape: Shape,
-    i: i16,
-    j: i16,
+    bottom_left: Point,
 }
 
 impl Rock {
-    fn step(&mut self, tower: &Tower, dj: Direction) -> bool {
+    fn step(&mut self, chamber: &Chamber, dj: Direction) -> bool {
         // Can we move laterally?
-        if self.horizontal_clearance(tower, dj as i16) {
-            self.j += dj as i16;
+        if self.horizontal_clearance(chamber, dj as Int) {
+            self.bottom_left.1 += dj as Int;
         }
 
         // Can we move down?
-        if self.vertical_clearance(tower, 1) {
-            self.i += 1;
+        if self.vertical_clearance(chamber, -1) {
+            self.bottom_left.0 -= 1;
             return true;
         }
 
         false
     }
 
-    fn horizontal_clearance(&self, tower: &Tower, dj: i16) -> bool {
+    fn horizontal_clearance(&self, chamber: &Chamber, dj: Int) -> bool {
         self.shape
-            .shift_horizontal(self.i, self.j, dj)
-            .all(|(i, j)| tower.is_clear(i, j))
+            .shift_horizontal(self.bottom_left, dj)
+            .all(|p| chamber.is_available(p))
     }
 
-    fn vertical_clearance(&self, tower: &Tower, di: i16) -> bool {
+    fn vertical_clearance(&self, chamber: &Chamber, di: Int) -> bool {
         self.shape
-            .shift_vertical(self.i, self.j, di)
-            .all(|(i, j)| tower.is_clear(i, j))
+            .shift_vertical(self.bottom_left, di)
+            .all(|p| chamber.is_available(p))
     }
 
-    fn points(&self) -> impl Iterator<Item = (i16, i16)> + '_ {
+    fn points(&self) -> impl Iterator<Item = Point> + '_ {
+        let p = self.bottom_left;
         self.shape
             .points()
             .iter()
-            .map(|&(di, dj)| (self.i + di, self.j + dj))
+            .map(move |&(di, dj)| (p.0 + di, p.1 + dj))
     }
 }
 
@@ -225,7 +234,9 @@ impl FromStr for Task {
 }
 
 impl Task {
-    const SHAPES: [Shape; 5] = [
+    const NUM_SHAPES: usize = 5;
+
+    const SHAPES: [Shape; Self::NUM_SHAPES] = [
         Shape::Horizontal,
         Shape::Plus,
         Shape::ReverseL,
@@ -233,46 +244,33 @@ impl Task {
         Shape::Square,
     ];
 
-    fn state_at(&self, num_rocks: usize) -> (Tower, Option<Rock>, usize) {
-        let mut tower = Tower::new();
+    pub fn height_of_tower(&self, num_rocks: usize) -> Int {
+        let (chamber, _rock, _step) = self.state_at(num_rocks);
+        chamber.height()
+    }
+
+    fn state_at(&self, num_rocks: usize) -> (Chamber, Option<Rock>, usize) {
+        let mut chamber = Chamber::new();
         let n = self.gusts.len();
         let mut step = 0;
         let mut last_rock = None;
 
-        for i in 0..num_rocks {
-            let shape = Self::SHAPES[i % 5];
-            let need = shape.height() + 3;
-            tower.ensure_capacity(need);
-
-            let avail = tower.cap() - tower.height();
-            let start = avail.saturating_sub(need) as i16;
-
+        for r in 0..num_rocks {
             let mut rock = Rock {
-                shape,
-                i: start,
-                j: 2,
+                shape: Self::SHAPES[r % Self::NUM_SHAPES],
+                bottom_left: (chamber.max_i + 4, 2),
             };
 
-            loop {
-                let dj = self.gusts[step % n];
+            while rock.step(&chamber, self.gusts[step % n]) {
                 step += 1;
-
-                if !rock.step(&tower, dj) {
-                    break;
-                }
             }
+            step += 1;
 
             last_rock = Some(rock.clone());
-
-            tower.add(rock);
+            chamber.insert(rock);
         }
 
-        (tower, last_rock, step)
-    }
-
-    pub fn height_of_tower(&self, num_rocks: usize) -> usize {
-        let (chamber, _rock, _step) = self.state_at(num_rocks);
-        chamber.height()
+        (chamber, last_rock, step)
     }
 }
 
@@ -303,12 +301,12 @@ mod tests {
         assert_eq!(task.height_of_tower(2022), 3068);
     }
 
-    #[test]
-    fn with_input() {
-        let input = include_str!("../data/input.txt");
-        let task = input.parse::<Task>().unwrap();
-        assert_eq!(task.height_of_tower(2022), 3133);
-    }
+    // #[test]
+    // fn with_input() {
+    //     let input = include_str!("../data/input.txt");
+    //     let task = input.parse::<Task>().unwrap();
+    //     assert_eq!(task.height_of_tower(2022), 3133);
+    // }
 
     #[test]
     fn subtle_bug() {

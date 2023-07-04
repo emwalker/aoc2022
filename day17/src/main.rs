@@ -5,7 +5,7 @@
 // TODO:
 // - Add cycle detection
 use color_eyre::{self, Result};
-use day17::naive;
+use day17::relative;
 use std::io::{self, Read};
 
 fn main() -> Result<()> {
@@ -13,7 +13,7 @@ fn main() -> Result<()> {
     let mut input = String::new();
     io::stdin().read_to_string(&mut input)?;
 
-    let task = naive::parse(&input)?;
+    let task = relative::parse(&input)?;
     println!(
         "part 1: height of tower, 2e03 steps: {}",
         task.height_of_tower(2022)

@@ -17,8 +17,9 @@ pub fn criterion_benchmark(c: &mut Criterion) {
             });
         };
     }
-    measure!(naive);
     measure!(chamber);
+    measure!(naive);
+    measure!(relative);
 
     group.finish();
 }
