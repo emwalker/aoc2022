@@ -268,7 +268,7 @@ impl Task {
     }
 }
 
-pub fn parse(input: &String) -> Result<Task> {
+pub fn parse(input: &str) -> Result<Task> {
     input.parse::<Task>()
 }
 

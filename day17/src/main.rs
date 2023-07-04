@@ -3,9 +3,6 @@
 // - https://www.youtube.com/watch?v=QXTBseFzkW4 (Python)
 //
 // TODO:
-// - Use criterion to get violin plots
-// - Replace the rock-specific match statements with something more general
-// - Model chamber as a hash of columns of heights (?)
 // - Add cycle detection
 use color_eyre::{self, Result};
 use day17::naive;

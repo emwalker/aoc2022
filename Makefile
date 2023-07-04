@@ -1,5 +1,5 @@
 fix:
-	cargo clippy --fix -- -D warnings
+	cargo clippy --fix --allow-dirty --allow-staged -- -D warnings
 
 build:
 	cargo build --release
