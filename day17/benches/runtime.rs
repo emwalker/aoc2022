@@ -20,6 +20,7 @@ pub fn criterion_benchmark(c: &mut Criterion) {
     measure!(chamber);
     measure!(naive);
     measure!(relative);
+    measure!(fasterthanlime);
 
     group.finish();
 }

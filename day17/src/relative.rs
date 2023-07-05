@@ -301,12 +301,12 @@ mod tests {
         assert_eq!(task.height_of_tower(2022), 3068);
     }
 
-    // #[test]
-    // fn with_input() {
-    //     let input = include_str!("../data/input.txt");
-    //     let task = input.parse::<Task>().unwrap();
-    //     assert_eq!(task.height_of_tower(2022), 3133);
-    // }
+    #[test]
+    fn with_input() {
+        let input = include_str!("../data/input.txt");
+        let task = input.parse::<Task>().unwrap();
+        assert_eq!(task.height_of_tower(2022), 3133);
+    }
 
     #[test]
     fn subtle_bug() {

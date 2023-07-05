@@ -1,9 +1,6 @@
 // Reference solutions
 // - https://fasterthanli.me/series/advent-of-code-2022/part-17#part-2-rust
 // - https://www.youtube.com/watch?v=QXTBseFzkW4 (Python)
-//
-// TODO:
-// - Add cycle detection
 use color_eyre::{self, Result};
 use day17::relative;
 use std::io::{self, Read};
