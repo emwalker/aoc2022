@@ -223,8 +223,14 @@ mod tests {
 
     #[test]
     fn part2() {
+        let task = parse(EXAMPLE).unwrap();
+        assert_eq!(task.height_of_tower(1_000_000_000_000), 1_514_285_714_288);
+    }
+
+    #[test]
+    fn part2_with_input() {
         let input = include_str!("../data/input.txt");
         let task = parse(input).unwrap();
-        assert_eq!(1_547_953_216_393, task.height_of_tower(1_000_000_000_000));
+        assert_eq!(task.height_of_tower(1_000_000_000_000), 1_547_953_216_393);
     }
 }

@@ -21,6 +21,7 @@ pub fn criterion_benchmark(c: &mut Criterion) {
     measure!(naive);
     measure!(relative);
     measure!(fasterthanlime);
+    measure!(cycles);
 
     group.finish();
 }
