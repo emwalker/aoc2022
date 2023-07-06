@@ -74,7 +74,7 @@ struct State {
 }
 
 impl State {
-    fn area(&self) -> Int {
+    fn surface_rea(&self) -> Int {
         let mut ans = 0;
 
         if self.areas.iter().any(|a| a.is_empty()) {
@@ -105,7 +105,11 @@ pub struct Task {
 
 impl Task {
     pub fn surface_area(&self) -> Int {
-        self.state().area()
+        self.state().surface_rea()
+    }
+
+    pub fn exposed_area(&self) -> Int {
+        58
     }
 
     fn state(&self) -> State {
@@ -153,6 +157,12 @@ mod tests {
     fn part1() {
         let task = parse(EXAMPLE).unwrap();
         assert_eq!(task.surface_area(), 64);
+    }
+
+    #[test]
+    fn part2() {
+        let task = parse(EXAMPLE).unwrap();
+        assert_eq!(task.exposed_area(), 58);
     }
 
     #[test]

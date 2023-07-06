@@ -9,6 +9,7 @@ fn main() -> Result<()> {
 
     let task = naive::parse(&input)?;
     println!("part 1: surface area: {}", task.surface_area());
+    println!("part 2: exposed area: {}", task.exposed_area());
 
     Ok(())
 }
