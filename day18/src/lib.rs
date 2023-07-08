@@ -1,6 +1,8 @@
 use color_eyre::{self, Report, Result};
 use std::str::FromStr;
 
+pub mod dfs1;
+pub mod dfs2;
 pub mod naive;
 
 #[derive(Clone, Copy, Debug)]
@@ -12,26 +14,46 @@ enum Axis {
 
 type Int = i16;
 
-#[derive(Debug, Clone, Copy)]
-struct Point([Int; 3]);
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
+struct Cube {
+    x: Int,
+    y: Int,
+    z: Int,
+}
 
-impl FromStr for Point {
+impl FromStr for Cube {
     type Err = Report;
 
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        let a: [Int; 3] = s
+        let a = s
             .split(',')
             .map(|v| v.trim().parse::<Int>().expect("an integer"))
-            .collect::<Vec<Int>>()
-            .try_into()
-            .expect("an array");
+            .collect::<Vec<Int>>();
 
-        Ok(Self(a))
+        Ok(Self {
+            x: a[0],
+            y: a[1],
+            z: a[2],
+        })
+    }
+}
+
+impl Cube {
+    fn adjacent(&self, other: &Self) -> bool {
+        self.x.abs_diff(other.x) + self.y.abs_diff(other.y) + self.z.abs_diff(other.z) == 1
+    }
+
+    fn shift(&self, (dx, dy, dz): (Int, Int, Int)) -> Self {
+        Self {
+            x: self.x + dx,
+            y: self.y + dy,
+            z: self.z + dz,
+        }
     }
 }
 
 #[derive(Debug)]
-pub struct Input(Vec<Point>);
+pub struct Input(Vec<Cube>);
 
 impl FromStr for Input {
     type Err = Report;
@@ -40,8 +62,8 @@ impl FromStr for Input {
         let vec = value
             .trim()
             .lines()
-            .map(|l| l.trim().parse::<Point>())
-            .collect::<Result<Vec<Point>>>()?;
+            .map(|l| l.trim().parse::<Cube>())
+            .collect::<Result<Vec<Cube>>>()?;
 
         Ok(Self(vec))
     }
@@ -64,7 +86,6 @@ mod tests {
             };
         }
 
-        // Placeholder
-        check!(naive);
+        check!(dfs1);
     }
 }

@@ -1,4 +1,4 @@
-use crate::{Axis, Input, Int, Point};
+use crate::{Axis, Cube, Input, Int};
 use color_eyre::Result;
 use itertools::Itertools;
 use std::collections::HashMap;
@@ -6,29 +6,37 @@ use std::collections::HashMap;
 #[derive(Debug, Hash, Eq, PartialEq)]
 struct Key(Int, Int);
 
-impl Point {
+impl Cube {
     fn key(&self, dim: Axis) -> Key {
         match dim {
-            Axis::X => Key(self.0[1], self.0[2]),
-            Axis::Y => Key(self.0[0], self.0[2]),
-            Axis::Z => Key(self.0[0], self.0[1]),
+            Axis::X => Key(self.y, self.z),
+            Axis::Y => Key(self.x, self.z),
+            Axis::Z => Key(self.x, self.y),
         }
     }
 }
 
 #[derive(Debug)]
 struct Column {
-    points: Vec<Point>,
+    points: Vec<Cube>,
     axis: Axis,
 }
 
 impl Column {
-    fn push(&mut self, p: Point) {
+    fn push(&mut self, p: Cube) {
         self.points.push(p)
     }
 
     fn values(&self) -> impl Iterator<Item = Int> + '_ {
-        self.points.iter().map(|p| p.0[self.axis as usize])
+        let value = |p: &Cube| -> Int {
+            match self.axis {
+                Axis::X => p.x,
+                Axis::Y => p.y,
+                Axis::Z => p.z,
+            }
+        };
+
+        self.points.iter().map(value)
     }
 }
 
@@ -51,7 +59,7 @@ impl PartialArea {
         self.points.is_empty()
     }
 
-    fn add(&mut self, p: Point) {
+    fn add(&mut self, p: Cube) {
         let key = p.key(self.axis);
 
         self.points

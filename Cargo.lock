@@ -425,7 +425,9 @@ name = "day18"
 version = "0.1.0"
 dependencies = [
  "color-eyre",
+ "criterion",
  "itertools 0.11.0",
+ "rustc-hash",
 ]
 
 [[package]]
