@@ -1,0 +1,12 @@
+[package]
+name = "day19"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "day19"
+path = "src/main.rs"
+
+[dependencies]
+color-eyre = "0.6.2"
+nom = "7.1.3"
