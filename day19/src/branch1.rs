@@ -52,6 +52,7 @@ impl State {
                 self.choose_robot(blueprint.geode_robot, Default::default())
                     .map(|state| Self {
                         resources: Resources {
+                            // Q: Why are we assuming we'll get minutes_remaining geodes?
                             geode: state.resources.geode + state.minutes_remaining,
                             ..state.resources
                         },
@@ -80,15 +81,18 @@ impl State {
                 self.resources_rate.obsidian,
                 self.resources.geode,
             ),
-            |(obsidian, rate, geode), minutes_remaining| {
+            |(obsidian, obsidian_rate, geode), minutes_remaining| {
                 if obsidian >= need.obsidian {
+                    // We can build a geode robot
                     (
-                        obsidian + rate - need.obsidian,
-                        rate,
+                        obsidian + obsidian_rate - need.obsidian,
+                        obsidian_rate,
                         geode.saturating_add(minutes_remaining),
                     )
                 } else {
-                    (obsidian + rate, rate + 1, geode)
+                    // We can't build a geode robot yet; collect one obsidian robot
+                    // Q: Why are we assuming we can build an obsidian rotot?
+                    (obsidian + obsidian_rate, obsidian_rate + 1, geode)
                 }
             },
         );
@@ -111,20 +115,27 @@ pub struct Task {
 }
 
 impl Task {
-    pub fn total_quality_level(&self) -> Result<Int> {
-        let ans = self
-            .blueprints()
+    pub fn total_quality_level(&self) -> Int {
+        self.blueprints()
             .iter()
             .map(|blueprint| {
                 let mut ans = 0;
                 branch_and_bound(blueprint, State::new(24), &mut ans);
-                Ok(blueprint.id * ans)
+                blueprint.id * ans
             })
-            .collect::<Result<Vec<Int>>>()?
-            .iter()
-            .sum();
+            .sum()
+    }
 
-        Ok(ans)
+    pub fn first_three(&self) -> Int {
+        self.blueprints()
+            .iter()
+            .take(3)
+            .map(|blueprint| {
+                let mut ans = 0;
+                branch_and_bound(blueprint, State::new(32), &mut ans);
+                ans
+            })
+            .product()
     }
 
     fn blueprints(&self) -> &Vec<Blueprint> {
@@ -144,13 +155,20 @@ mod tests {
     #[test]
     fn part1() {
         let task = parse(crate::EXAMPLE).unwrap();
-        assert_eq!(task.total_quality_level().unwrap(), 33);
+        assert_eq!(task.total_quality_level(), 33);
+    }
+
+    #[test]
+    fn part2() {
+        let task = parse(crate::EXAMPLE).unwrap();
+        assert_eq!(task.first_three(), 3472);
     }
 
     #[test]
     fn with_input() {
         let input = include_str!("../data/input.txt");
         let task = parse(input).unwrap();
-        assert_eq!(task.total_quality_level().unwrap(), 1150);
+        assert_eq!(task.total_quality_level(), 1150);
+        assert_eq!(task.first_three(), 37367);
     }
 }

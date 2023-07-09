@@ -18,7 +18,8 @@ fn main() -> Result<()> {
     io::stdin().read_to_string(&mut input)?;
 
     let task = branch1::parse(&input)?;
-    println!("part 1: quality level: {}", task.total_quality_level()?);
+    println!("part 1: quality level: {}", task.total_quality_level());
+    println!("part 2: product of first three: {}", task.first_three());
 
     Ok(())
 }
