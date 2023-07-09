@@ -2,7 +2,7 @@
 use color_eyre::{eyre::eyre, Report, Result};
 use std::str::FromStr;
 
-type Int = i16;
+type Int = i64;
 
 struct Input(Vec<Int>);
 
@@ -30,47 +30,62 @@ pub struct Task {
 }
 
 impl Task {
+    const DECRIPTION_KEY: Int = 811589153;
+
     pub fn part1(&self) -> Int {
-        let n = self.input.0.len();
-        let values = self.shuffled_values();
+        let values = self.mix_values(1, 1);
+        self.decode(&values)
+    }
+
+    pub fn part2(&self) -> Int {
+        let values = self.mix_values(Self::DECRIPTION_KEY, 10);
+        self.decode(&values)
+    }
+
+    fn decode(&self, values: &Vec<Int>) -> Int {
+        let n = values.len();
         let i_zero = values.iter().position(|&v| v == 0).expect("zero value");
         values[(1000 + i_zero) % n] + values[(2000 + i_zero) % n] + values[(3000 + i_zero) % n]
     }
 
-    fn shuffled_values(&self) -> Vec<Int> {
-        let values = self.input.0.clone();
-        let mut indexes = (0..values.len()).collect::<Vec<_>>();
+    fn mix_values(&self, key: Int, rounds: usize) -> Vec<Int> {
+        let mut numbers = self
+            .input
+            .0
+            .iter()
+            .map(|v| v * key)
+            .enumerate()
+            .collect::<Vec<_>>();
 
         // We use modulo arithmetic with n-1 in this case, apparently because we're working with
         // a circular buffer.
-        // Q: Why are we using n-1?
-        assert!(!values.is_empty());
-        let n = values.len() - 1;
+        // Q: Why are we using n-1? A: According to the link at the top of the file, it's due to
+        // the problem statement: moving an element by (n - 1) places in a list of length n leaves
+        // list unchanged.
+        assert!(!numbers.is_empty());
+        let n = numbers.len();
 
-        // O(n) * O(n) -> O(n**2)
-        for (i, val) in values.iter().enumerate() {
-            // O(n)
-            let curr_i = indexes
-                .iter()
-                .position(|&k| k == i)
-                .expect("index exists in array");
+        for _ in 0..rounds {
+            // O(n) * O(n) -> O(n**2)
+            for i in 0..numbers.len() {
+                // O(n)
+                let curr_i = numbers
+                    .iter()
+                    .position(|n| n.0 == i)
+                    .expect("index exists in array");
 
-            // In Rust, the % operator provides the remainder rather than the modulo.  Here we want
-            // a positive value when (values[i] + current_i) is negative, which is what rem_euclid
-            // gives us. https://stackoverflow.com/q/31210357/61048
-            let mut next_i = (val + curr_i as Int).rem_euclid(n as Int) as usize;
+                // In Rust, the % operator provides the remainder rather than the modulo.  Here we
+                // want a positive value when (values[i] + current_i) is negative, which is what
+                // rem_euclid gives us. https://stackoverflow.com/q/31210357/61048
+                let next_i = (numbers[curr_i].1 + curr_i as Int).rem_euclid(n as Int - 1);
 
-            // Q: Why do we have to reset to n-1 here?
-            if next_i == 0 {
-                next_i = n;
+                // Both O(n)
+                let tmp = numbers.remove(curr_i);
+                numbers.insert(next_i as usize, tmp);
             }
-
-            // Both O(n)
-            let tmp = indexes.remove(curr_i);
-            indexes.insert(next_i, tmp);
         }
 
-        indexes.iter().map(|&i| values[i]).collect()
+        numbers.into_iter().map(|(_, v)| v).collect::<Vec<_>>()
     }
 }
 
@@ -95,8 +110,25 @@ mod tests {
     #[test]
     fn part1() {
         let task = parse(EXAMPLE).unwrap();
-        assert_eq!(task.shuffled_values(), &[1, 2, -3, 4, 0, 3, -2]);
         assert_eq!(task.part1(), 3);
+    }
+
+    #[test]
+    fn part2() {
+        let task = parse(EXAMPLE).unwrap();
+        assert_eq!(
+            task.mix_values(Task::DECRIPTION_KEY, 10),
+            &[
+                0,
+                -2434767459,
+                1623178306,
+                3246356612,
+                -1623178306,
+                2434767459,
+                811589153
+            ]
+        );
+        assert_eq!(task.part2(), 1623178306);
     }
 
     #[test]

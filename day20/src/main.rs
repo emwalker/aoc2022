@@ -16,6 +16,7 @@ fn main() -> Result<()> {
 
     let task = naive::parse(&input)?;
     println!("part 1: sum of three numbers: {}", task.part1());
+    println!("part 1: sum after proper mixing: {}", task.part2());
 
     Ok(())
 }
