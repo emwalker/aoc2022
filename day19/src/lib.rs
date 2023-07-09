@@ -7,9 +7,12 @@ use nom::{
     sequence::tuple,
     Finish, IResult,
 };
-use std::str::FromStr;
+use std::{
+    ops::{Add, Mul},
+    str::FromStr,
+};
 
-pub mod naive;
+pub mod branch1;
 
 pub type Int = u16;
 
@@ -26,44 +29,78 @@ Blueprint 2: \
     Each obsidian robot costs 3 ore and 8 clay. \
     Each geode robot costs 3 ore and 12 obsidian.";
 
-#[derive(Debug)]
-struct OreRobotInput {
-    ore: Int,
-}
-
-#[derive(Debug)]
-struct ClayRobotInput {
-    ore: Int,
-}
-
-struct ObsidianRobotInput {
+#[derive(Clone, Copy, Debug, Default)]
+struct Resources {
     ore: Int,
     clay: Int,
+    obsidian: Int,
+    geode: Int,
 }
 
-impl std::fmt::Debug for ObsidianRobotInput {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "(ore: {}, clay: {})", self.ore, self.clay)
+const ONE_ORE: Resources = Resources {
+    ore: 1,
+    clay: 0,
+    obsidian: 0,
+    geode: 0,
+};
+
+const ONE_CLAY: Resources = Resources {
+    ore: 0,
+    clay: 1,
+    obsidian: 0,
+    geode: 0,
+};
+
+const ONE_OBSIDIAN: Resources = Resources {
+    ore: 0,
+    clay: 0,
+    obsidian: 1,
+    geode: 0,
+};
+
+impl Mul<Int> for Resources {
+    type Output = Self;
+
+    fn mul(self, rhs: Int) -> Self::Output {
+        Self {
+            ore: self.ore * rhs,
+            clay: self.clay * rhs,
+            obsidian: self.obsidian * rhs,
+            geode: self.geode * rhs,
+        }
     }
 }
 
-struct GeodeRobotInput {
-    ore: Int,
-    obsidian: Int,
+impl Add for Resources {
+    type Output = Self;
+
+    fn add(self, other: Self) -> Self::Output {
+        Self {
+            ore: self.ore + other.ore,
+            clay: self.clay + other.clay,
+            obsidian: self.obsidian + other.obsidian,
+            geode: self.geode + other.geode,
+        }
+    }
 }
 
-impl std::fmt::Debug for GeodeRobotInput {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "(ore: {}, obsidian: {})", self.ore, self.obsidian)
+impl Resources {
+    fn checked_sub(self, rhs: Self) -> Option<Self> {
+        Some(Self {
+            ore: self.ore.checked_sub(rhs.ore)?,
+            clay: self.clay.checked_sub(rhs.clay)?,
+            obsidian: self.obsidian.checked_sub(rhs.obsidian)?,
+            geode: self.geode.checked_sub(rhs.geode)?,
+        })
     }
 }
 
 struct Blueprint {
     id: Int,
-    ore_robot: OreRobotInput,
-    clay_robot: ClayRobotInput,
-    obsidian_robot: ObsidianRobotInput,
-    geode_robot: GeodeRobotInput,
+    ore_robot: Resources,
+    clay_robot: Resources,
+    obsidian_robot: Resources,
+    geode_robot: Resources,
 }
 
 impl std::fmt::Debug for Blueprint {
@@ -73,6 +110,15 @@ impl std::fmt::Debug for Blueprint {
             "Blueprint {{ id: {}, ore: {:?}, clay: {:?}, obsidian: {:?} geode: {:?} }}",
             self.id, self.ore_robot.ore, self.clay_robot.ore, self.obsidian_robot, self.geode_robot
         )
+    }
+}
+
+impl Blueprint {
+    fn max_ore_cost(&self) -> Int {
+        self.clay_robot
+            .ore
+            .max(self.obsidian_robot.ore)
+            .max(self.geode_robot.ore)
     }
 }
 
@@ -88,7 +134,7 @@ fn parse_id(i: &str) -> IResult<&str, Int> {
     )(i)
 }
 
-fn parse_ore(i: &str) -> IResult<&str, OreRobotInput> {
+fn parse_ore(i: &str) -> IResult<&str, Resources> {
     map(
         tuple((
             tag("Each ore robot costs "),
@@ -96,11 +142,14 @@ fn parse_ore(i: &str) -> IResult<&str, OreRobotInput> {
             tag(" ore."),
             multispace1,
         )),
-        |(_, ore, _, _)| OreRobotInput { ore: ore as _ },
+        |(_, ore, _, _)| Resources {
+            ore: ore as _,
+            ..Default::default()
+        },
     )(i)
 }
 
-fn parse_clay(i: &str) -> IResult<&str, ClayRobotInput> {
+fn parse_clay(i: &str) -> IResult<&str, Resources> {
     map(
         tuple((
             tag("Each clay robot costs "),
@@ -108,11 +157,14 @@ fn parse_clay(i: &str) -> IResult<&str, ClayRobotInput> {
             tag(" ore."),
             multispace1,
         )),
-        |(_, ore, _, _)| ClayRobotInput { ore: ore as _ },
+        |(_, ore, _, _)| Resources {
+            ore: ore as _,
+            ..Default::default()
+        },
     )(i)
 }
 
-fn parse_obsidian(i: &str) -> IResult<&str, ObsidianRobotInput> {
+fn parse_obsidian(i: &str) -> IResult<&str, Resources> {
     map(
         tuple((
             tag("Each obsidian robot costs "),
@@ -122,14 +174,15 @@ fn parse_obsidian(i: &str) -> IResult<&str, ObsidianRobotInput> {
             tag(" clay."),
             multispace1,
         )),
-        |(_, ore, _, clay, _, _)| ObsidianRobotInput {
+        |(_, ore, _, clay, _, _)| Resources {
             ore: ore as _,
             clay: clay as _,
+            ..Default::default()
         },
     )(i)
 }
 
-fn parse_geode(i: &str) -> IResult<&str, GeodeRobotInput> {
+fn parse_geode(i: &str) -> IResult<&str, Resources> {
     map(
         tuple((
             tag("Each geode robot costs "),
@@ -139,9 +192,10 @@ fn parse_geode(i: &str) -> IResult<&str, GeodeRobotInput> {
             tag(" obsidian."),
             multispace0,
         )),
-        |(_, ore, _, obsidian, _, _)| GeodeRobotInput {
+        |(_, ore, _, obsidian, _, _)| Resources {
             ore: ore as _,
             obsidian: obsidian as _,
+            ..Default::default()
         },
     )(i)
 }

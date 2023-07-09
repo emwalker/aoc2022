@@ -10,14 +10,14 @@
 // - https://www.reddit.com/r/adventofcode/comments/zpihwi/comment/j0w89n9/
 //   another Rust solution
 use color_eyre::Result;
-use day19::naive;
+use day19::branch1;
 use std::io::{self, Read};
 
 fn main() -> Result<()> {
     let mut input = String::new();
     io::stdin().read_to_string(&mut input)?;
 
-    let task = naive::parse(&input)?;
+    let task = branch1::parse(&input)?;
     println!("part 1: quality level: {}", task.total_quality_level()?);
 
     Ok(())
