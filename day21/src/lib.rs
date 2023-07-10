@@ -29,7 +29,7 @@ lgvd: ljgn * ptdq
 drzm: hmdt - zczc
 hmdt: 32";
 
-pub type Int = u64;
+pub type Int = i64;
 
 #[derive(Debug)]
 pub enum Step {
@@ -49,7 +49,7 @@ fn parse_shout(i: &str) -> IResult<&str, (String, Step)> {
             take_till1(|c| c == ':'),
             tag(":"),
             multispace1,
-            nom::character::complete::u64,
+            nom::character::complete::i64,
         )),
         |(name, _, _, n): (&str, &str, &str, Int)| (name.to_owned(), Step::Shout(n as _)),
     )(i)

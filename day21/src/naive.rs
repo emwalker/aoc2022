@@ -6,6 +6,8 @@ pub struct Task {
     pub input: Input,
 }
 
+const HUMAN: &str = "humn";
+
 impl Task {
     pub fn part1(&self) -> Int {
         let mut cache = HashMap::<String, Int>::new();
@@ -29,6 +31,61 @@ impl Task {
 
         dfs("root", &self.input, &mut cache)
     }
+
+    pub fn part2(&self) -> Int {
+        let (mut lo, mut hi) = (Int::MIN + 1, Int::MAX - 1);
+        let mut mid;
+
+        fn dfs(step_name: &str, input: &Input, cache: &mut HashMap<String, Int>, humn: Int) -> Int {
+            if let Some(&ans) = cache.get(step_name) {
+                return ans;
+            }
+
+            let ans = if step_name == HUMAN {
+                humn
+            } else {
+                match input.get(step_name).unwrap() {
+                    Step::Shout(ans) => *ans,
+                    Step::Add(lhs, rhs) => {
+                        if step_name == "root" {
+                            dfs(lhs, input, cache, humn) - dfs(rhs, input, cache, humn)
+                        } else {
+                            dfs(lhs, input, cache, humn) + dfs(rhs, input, cache, humn)
+                        }
+                    }
+                    Step::Mul(lhs, rhs) => {
+                        dfs(lhs, input, cache, humn) * dfs(rhs, input, cache, humn)
+                    }
+                    Step::Sub(lhs, rhs) => {
+                        dfs(lhs, input, cache, humn) - dfs(rhs, input, cache, humn)
+                    }
+                    Step::Div(lhs, rhs) => {
+                        dfs(lhs, input, cache, humn) / dfs(rhs, input, cache, humn)
+                    }
+                }
+            };
+
+            cache.insert(step_name.into(), ans);
+            ans
+        }
+
+        while lo <= hi {
+            mid = (lo + hi) / 2;
+
+            let mut cache = HashMap::<String, Int>::new();
+            let ans = dfs("root", &self.input, &mut cache, mid);
+
+            if ans == 0 {
+                return mid;
+            } else if ans.is_negative() {
+                lo = mid;
+            } else {
+                hi = mid - 1;
+            }
+        }
+
+        unreachable!("did not converge")
+    }
 }
 
 pub fn parse(s: &str) -> Result<Task> {
@@ -45,6 +102,12 @@ mod tests {
     fn part1() {
         let task = parse(EXAMPLE).unwrap();
         assert_eq!(task.part1(), 152);
+    }
+
+    #[test]
+    fn part2() {
+        let task = parse(EXAMPLE).unwrap();
+        assert_eq!(task.part2(), 301);
     }
 
     #[test]
