@@ -15,7 +15,10 @@ fn main() -> Result<()> {
 
     let task = naive::parse(&s)?;
     println!("part 1: final number: {}", task.part1());
-    println!("part 2: final number: {}", task.part2());
+    println!(
+        "part 2: final number: {}",
+        task.part2().expect("a converging answer")
+    );
 
     Ok(())
 }

@@ -6,14 +6,14 @@ const HUMAN: &str = "humn";
 
 struct Trial {
     humn: Int,
-    cache: HashMap<String, Int>,
+    cache: HashMap<String, Option<Int>>,
     steps: HashMap<String, Step>,
 }
 
 impl Trial {
-    fn dfs(&mut self, step_name: &str) -> Int {
+    fn dfs(&mut self, step_name: &str) -> Option<Int> {
         if step_name == HUMAN {
-            return self.humn;
+            return Some(self.humn);
         }
 
         if let Some(&val) = self.cache.get(step_name) {
@@ -25,22 +25,28 @@ impl Trial {
         };
 
         let val = match step.to_owned() {
-            Step::Shout(ans) => ans,
+            Step::Shout(ans) => Some(ans),
+            Step::Mul(lhs, rhs) => Some(self.dfs(&lhs)? * self.dfs(&rhs)?),
+            Step::Sub(lhs, rhs) => Some(self.dfs(&lhs)? - self.dfs(&rhs)?),
+
             Step::Add(lhs, rhs) => {
-                if step_name == "root" {
-                    (self.dfs(&lhs) - self.dfs(&rhs)).signum()
+                let ans = if step_name == "root" {
+                    self.dfs(&lhs)? - self.dfs(&rhs)?
                 } else {
-                    self.dfs(&lhs) + self.dfs(&rhs)
-                }
+                    self.dfs(&lhs)? + self.dfs(&rhs)?
+                };
+                Some(ans)
             }
-            Step::Mul(lhs, rhs) => self.dfs(&lhs) * self.dfs(&rhs),
-            Step::Sub(lhs, rhs) => self.dfs(&lhs) - self.dfs(&rhs),
+
             Step::Div(lhs, rhs) => {
-                let l = self.dfs(&lhs);
-                let r = self.dfs(&rhs);
-                let val = l / r;
-                assert_eq!(l, val * r);
-                val
+                let l = self.dfs(&lhs)?;
+                let r = self.dfs(&rhs)?;
+                let (val, rem) = (l / r, l % r);
+                if rem == 0 {
+                    Some(val)
+                } else {
+                    None
+                }
             }
         };
 
@@ -48,7 +54,7 @@ impl Trial {
         val
     }
 
-    fn eval(&mut self) -> Int {
+    fn eval(&mut self) -> Option<Int> {
         self.dfs("root")
     }
 }
@@ -81,44 +87,59 @@ impl Task {
         dfs("root", &self.input, &mut cache)
     }
 
-    pub fn part2(&self) -> Int {
-        let mut lo = (0, self.eval(0));
-        let mut hi = (1, self.eval(1));
+    pub fn part2(&self) -> Option<Int> {
+        let mut i = 0;
+        let mut lo = self.eval(0, 1).expect("lo");
+        let mut hi = self.eval(1, 1).expect("hi");
+        dbg!(lo, hi);
 
         while lo.1.signum() == hi.1.signum() {
             lo = hi;
-            hi = (lo.0 * 2, self.eval(lo.0 * 2));
+            hi = self.eval(lo.0 * 2, 1)?;
         }
-
-        let mut i = 0;
 
         while i < 100 {
             let m = (lo.0 + hi.0) / 2;
-            let mid = (m, self.eval(m));
+            let mid = self.eval(m, 1)?;
 
-            if mid.1 == 0 {
-                return mid.0;
-            }
-
-            let mid2 = (m + 1, self.eval(m + 1));
-
-            if mid2.1 == 0 {
-                return mid2.0;
-            }
-
-            if lo.1 == mid.1 {
+            if mid.1.signum() == lo.1.signum() {
                 lo = mid;
             } else {
                 hi = mid;
             }
 
+            if lo.1 == 0 {
+                return Some(lo.0);
+            }
+
+            if hi.1 == 0 {
+                return Some(hi.0);
+            }
+
             i += 1;
         }
 
-        unreachable!()
+        None
     }
 
-    fn eval(&self, humn: Int) -> Int {
+    fn eval(&self, mut k: Int, dk: Int) -> Option<(Int, Int)> {
+        let mut i = 0;
+
+        while i < 20 {
+            let val = self.trial(k);
+
+            if let Some(val) = val {
+                return Some((k, val));
+            }
+
+            k += dk;
+            i += 1;
+        }
+
+        None
+    }
+
+    fn trial(&self, humn: Int) -> Option<Int> {
         Trial {
             steps: self.input.0.clone(),
             cache: HashMap::new(),
@@ -147,7 +168,7 @@ mod tests {
     #[test]
     fn part2() {
         let task = parse(EXAMPLE).unwrap();
-        assert_eq!(task.part2(), 301);
+        assert_eq!(task.part2().unwrap(), 301);
     }
 
     #[test]
@@ -156,6 +177,6 @@ mod tests {
         let task = parse(input).unwrap();
 
         assert_eq!(task.part1(), 43_699_799_094_202);
-        assert_eq!(task.part2(), 3_375_719_472_770);
+        assert_eq!(task.part2().unwrap(), 3_375_719_472_770);
     }
 }
