@@ -1,4 +1,4 @@
-use color_eyre::{eyre::eyre, Report};
+use color_eyre::{eyre::eyre, Result};
 use core::panic;
 use nom::{
     branch::alt,
@@ -9,9 +9,9 @@ use nom::{
     sequence::{separated_pair, tuple},
     Finish, IResult,
 };
-use std::{collections::HashMap, str::FromStr};
+use std::collections::HashMap;
 
-pub mod naive;
+pub mod solve;
 
 pub const EXAMPLE: &str = "\
 root: pppw + sjmn
@@ -33,16 +33,16 @@ hmdt: 32";
 pub type Int = i64;
 
 #[derive(Debug, Clone)]
-pub enum Step {
+pub enum Step<'s> {
     Shout(Int),
-    Add(String, String),
-    Mul(String, String),
-    Sub(String, String),
-    Div(String, String),
+    Add(&'s str, &'s str),
+    Mul(&'s str, &'s str),
+    Sub(&'s str, &'s str),
+    Div(&'s str, &'s str),
 }
 
 #[derive(Debug)]
-pub struct Input(HashMap<String, Step>);
+pub struct Input<'s>(HashMap<&'s str, Step<'s>>);
 
 fn parse_expression(i: &str) -> IResult<&str, Step> {
     alt((
@@ -54,10 +54,10 @@ fn parse_expression(i: &str) -> IResult<&str, Step> {
                 alpha1,
             )),
             |(lhs, op, rhs)| match op {
-                " + " => Step::Add(lhs.into(), rhs.into()),
-                " - " => Step::Sub(lhs.into(), rhs.into()),
-                " * " => Step::Mul(lhs.into(), rhs.into()),
-                " / " => Step::Div(lhs.into(), rhs.into()),
+                " + " => Step::Add(lhs, rhs),
+                " - " => Step::Sub(lhs, rhs),
+                " * " => Step::Mul(lhs, rhs),
+                " / " => Step::Div(lhs, rhs),
                 _ => panic!("bad operator: {op}"),
             },
         ),
@@ -68,22 +68,18 @@ fn parse_step(i: &str) -> IResult<&str, (&str, Step)> {
     separated_pair(alpha1, tag(": "), parse_expression)(i)
 }
 
-impl FromStr for Input {
-    type Err = Report;
+pub fn parse_input(i: &'static str) -> Result<Input<'static>> {
+    let (s, steps) = all_consuming(separated_list1(multispace1, parse_step))(i.trim())
+        .finish()
+        .or(Err(eyre!("failed to parse input")))?;
+    assert!(s.is_empty());
 
-    fn from_str(i: &str) -> Result<Self, Self::Err> {
-        let (s, steps) = all_consuming(separated_list1(multispace1, parse_step))(i.trim())
-            .finish()
-            .or(Err(eyre!("failed to parse input")))?;
-        assert!(s.is_empty());
+    let map = steps
+        .into_iter()
+        .map(|(n, s)| (n, s))
+        .collect::<HashMap<_, _>>();
 
-        let map = steps
-            .into_iter()
-            .map(|(n, s)| (n.to_owned(), s))
-            .collect::<HashMap<String, _>>();
-
-        Ok(Self(map))
-    }
+    Ok(Input(map))
 }
 
 #[cfg(test)]
@@ -92,7 +88,7 @@ mod tests {
 
     #[test]
     fn parsing() {
-        let input = EXAMPLE.parse::<Input>().unwrap();
+        let input = parse_input(EXAMPLE).unwrap();
 
         assert_eq!(input.0.len(), 15);
         assert!(matches!(input.0.get("root"), Some(Step::Add(_, _))));
