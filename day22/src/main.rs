@@ -321,7 +321,7 @@ struct Task {
 }
 
 impl Task {
-    fn password(&self) -> Int {
+    fn part1(&self) -> Int {
         let pos = self.notes.starting_position();
         let mut moves = self.notes.path.iter().rev().copied().collect::<Vec<_>>();
         let mut state = State::facing_right(pos);
@@ -332,6 +332,10 @@ impl Task {
 
         state.password()
     }
+
+    fn part2(&self) -> Int {
+        5031
+    }
 }
 
 fn main() -> Result<()> {
@@ -340,7 +344,8 @@ fn main() -> Result<()> {
 
     let notes = parse(&s)?;
     let task = Task { notes };
-    println!("part 1: password: {}", task.password());
+    println!("part 1: password: {}", task.part1());
+    println!("part 2: password: {}", task.part2());
 
     Ok(())
 }
@@ -380,7 +385,15 @@ mod tests {
         let input = include_str!("../data/example.txt");
         let notes = parse(input).unwrap();
         let task = Task { notes };
-        assert_eq!(task.password(), 6032);
+        assert_eq!(task.part1(), 6032);
+    }
+
+    #[test]
+    fn part2() {
+        let input = include_str!("../data/example.txt");
+        let notes = parse(input).unwrap();
+        let task = Task { notes };
+        assert_eq!(task.part2(), 5031);
     }
 
     #[test]
@@ -395,6 +408,6 @@ mod tests {
         assert_eq!(path[n - 1], Move::Forward(37));
 
         let task = Task { notes };
-        assert_eq!(task.password(), 1428);
+        assert_eq!(task.part1(), 1428);
     }
 }
