@@ -1,5 +1,32 @@
+// Reference solutions for part 2:
+// - https://github.com/mfornet/advent-of-code-2022/blob/main/day22b/src/main.rs
+//   Revisit.  Generic in dimensions.  Generic in shape.  Uses division by 6 and the square root of
+//   the number of cells to find the length of a side.  Inneficient iteration over path commands.
+// - https://github.com/idanarye/aoc-2022/blob/main/src/day22.rs
+//   Revisit.  Ranges for row and column indexes.  Regex for parsing commands.  Index trait.
+//   Generic solution.
+// - https://github.com/Crazytieguy/advent-of-code/blob/master/2022/src/bin/day22/main.rs
+//   Use of Rotation(Clockwise).  Use of Turn(Rotation).  Hard-coded in dimensions.  Hard coded in
+//   shape.
+// - https://github.com/jchevertonwynne/advent-of-code-2022/blob/main/src/days/day22.rs
+//   Use of a hash map with a fast hasher for the world map, not inserting anything into the map
+//   for the blank regions.
+// - https://github.com/sanraith/aoc2022/blob/aa33a4a7a8dfe6e522a5fe6af39c17b35892e465/aoc-lib/src/solutions/year2022/day22.rs
+//   Has a context utility for printing out progress.  Generic solution.
+// - https://github.com/HoshigaIkaro/aoc-2022/blob/main/src/days/day_22.rs
+//   Use of integer assignments in enum.  Use of a template parameter to differentiate a "Flat"
+//   implementation from a "Cube" implementation.  Hard-coded dimensions.
+// - https://github.com/kelleyvanevert/adventofcode2022/blob/main/day22/src/main.rs
+//   quaternion::{axis_angle, rotate_vector}, itertools::tuple_combinations.  Generic solution.
+// - https://github.com/pavel1269/advent-of-code/blob/main/2022/src/day22/mod.rs
+//   test_case to create permutations of a generic test
+// - https://gist.github.com/mgedmin/71d632e40d4de5c9486a4616ffb53208
+//   bit vectors to compute shared edges
+//
 use color_eyre::{eyre::eyre, Result};
+use itertools::Itertools;
 use num::complex::Complex;
+use regex::Regex;
 use std::{
     fmt::{Debug, Write},
     io::{self, Read},
@@ -43,15 +70,16 @@ impl Mul for Pos {
 enum Square {
     Open,
     Wall,
-    OffBoard,
+    Nothing,
 }
+use Square::*;
 
 impl Debug for Square {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Open => write!(f, "."),
             Self::Wall => write!(f, "#"),
-            Self::OffBoard => write!(f, " "),
+            Self::Nothing => write!(f, " "),
         }
     }
 }
@@ -62,6 +90,7 @@ enum Move {
     TurnLeft,
     TurnRight,
 }
+use Move::*;
 
 #[derive(Debug)]
 struct Row(Vec<Square>);
@@ -95,20 +124,23 @@ impl Debug for Map {
 #[derive(Debug)]
 struct Notes {
     map: Map,
+    #[allow(unused)]
+    side: usize,
     path: Vec<Move>,
 }
 
 impl Notes {
     fn starting_position(&self) -> Pos {
-        let first = self.map.rows.first().expect("a row");
+        let (j, _square) = self
+            .map
+            .rows
+            .first()
+            .expect("a row")
+            .squares()
+            .find_position(|&&square| square == Open)
+            .unwrap();
 
-        for (j, &square) in first.squares().enumerate() {
-            if square == Square::Open {
-                return Pos::new(0, j as Int);
-            }
-        }
-
-        unreachable!()
+        Pos::new(0, j as Int)
     }
 
     fn val(&self, pos: Pos) -> Option<&Square> {
@@ -136,9 +168,9 @@ impl Notes {
 
         while next_pos != pos {
             match self.val(next_pos) {
-                Some(Square::Open) => return (true, next_pos),
-                Some(Square::Wall) => return (false, pos),
-                Some(Square::OffBoard) | None => {
+                Some(Open) => return (true, next_pos),
+                Some(Wall) => return (false, pos),
+                Some(Nothing) | None => {
                     next_pos = self.wrap(next_pos + dir);
                 }
             }
@@ -149,41 +181,12 @@ impl Notes {
     }
 }
 
-struct NumBuilder {
-    chars: Vec<char>,
-}
-
-impl NumBuilder {
-    fn new() -> Self {
-        Self { chars: vec![] }
-    }
-
-    fn is_empty(&self) -> bool {
-        self.chars.is_empty()
-    }
-
-    fn build(&mut self) -> Int {
-        let n = self
-            .chars
-            .iter()
-            .collect::<String>()
-            .parse::<Int>()
-            .expect("failed to parse int");
-        self.chars = vec![];
-        n
-    }
-
-    fn push(&mut self, c: char) {
-        self.chars.push(c)
-    }
-}
-
 fn parse(s: &str) -> Result<Notes> {
     let mut rows = vec![];
-    let lines = s.lines().collect::<Vec<&str>>();
+    let mut lines = s.lines();
     let mut width = 0;
 
-    for line in lines.iter() {
+    for line in &mut lines {
         if line.is_empty() {
             break;
         }
@@ -193,9 +196,9 @@ fn parse(s: &str) -> Result<Notes> {
 
         for c in line.chars() {
             let square = match c {
-                ' ' => Square::OffBoard,
-                '.' => Square::Open,
-                '#' => Square::Wall,
+                ' ' => Nothing,
+                '.' => Open,
+                '#' => Wall,
                 _ => return Err(eyre!("unknown square: {}", c)),
             };
 
@@ -209,76 +212,51 @@ fn parse(s: &str) -> Result<Notes> {
         return Err(eyre!("map cannot be empty"));
     }
 
-    let s = lines
-        .last()
-        .ok_or(eyre!("expected a path"))?
-        .chars()
-        .collect::<Vec<char>>();
-    let mut path = vec![];
-    let mut curr_num = NumBuilder::new();
-
-    for c in s {
-        match c {
-            'L' => {
-                if !curr_num.is_empty() {
-                    path.push(Move::Forward(curr_num.build()));
+    let commands = lines.next().unwrap();
+    let pattern = Regex::new(r"\d+|[LR]").unwrap();
+    let path = pattern
+        .captures_iter(commands)
+        .flat_map(|cap| {
+            if let Some(s) = cap.get(0) {
+                match s.as_str() {
+                    "L" => Some(TurnLeft),
+                    "R" => Some(TurnRight),
+                    n => Some(Forward(n.parse::<Int>().expect("an integer"))),
                 }
-
-                path.push(Move::TurnLeft)
+            } else {
+                None
             }
+        })
+        .collect::<Vec<_>>();
 
-            'R' => {
-                if !curr_num.is_empty() {
-                    path.push(Move::Forward(curr_num.build()));
-                }
+    let count = rows
+        .iter()
+        .flat_map(|r| r.squares().filter(|s| matches!(s, Open | Wall)))
+        .count();
 
-                path.push(Move::TurnRight)
-            }
-
-            _ => curr_num.push(c),
-        }
+    if count % 6 != 0 {
+        return Err(eyre!("bad dimensions"));
     }
 
-    if !curr_num.is_empty() {
-        path.push(Move::Forward(curr_num.build()));
+    let side = ((count / 6) as f32).sqrt() as usize;
+    if count != 6 * side * side {
+        return Err(eyre!("bad dimensions"));
     }
 
     Ok(Notes {
         map: Map { rows, width },
+        side,
         path,
     })
 }
 
-#[derive(Debug)]
-struct State {
-    pos: Pos,
-    dir: Pos,
-}
-
-impl State {
-    fn facing_right(pos: Pos) -> Self {
-        Self {
-            pos,
-            dir: Pos::new(0, 1),
-        }
-    }
-}
-
-impl State {
-    // Since our rows begin at 1 and increase going down the map, we reverse the usual
-    // counterclockwise rotation that happens when you multiply by i.  Suppose you start facing
-    // right, { re: 1, im: 0}, and you want to turn left, so that you're now facing up.  The
-    // result needs to be { re: 0, im: -1 } in order to move up the map by successively adding the
-    // delta that is being used to represent the direction.  This is opposite from what normally
-    // happens when you multiply by i.
-    const TURN_LEFT: Pos = Pos::new(-1, 0);
-    const TURN_RIGHT: Pos = Pos::new(1, 0);
+trait State {
+    fn facing_right(pos: Pos) -> Self;
+    fn step(self, mv: Move, notes: &Notes) -> Self;
+    fn position(&self) -> (Pos, Pos);
 
     fn password(&self) -> Int {
-        let Self {
-            pos: Pos(Complex { re: j, im: i }),
-            dir,
-        } = self;
+        let (Pos(Complex { re: j, im: i }), dir) = self.position();
 
         let facing = match dir {
             Pos(Complex { re: 1, im: 0 }) => 0,
@@ -290,15 +268,45 @@ impl State {
 
         (i + 1) * 1000 + (j + 1) * 4 + facing
     }
+}
+
+struct Flat {
+    pos: Pos,
+    dir: Pos,
+}
+
+impl Flat {
+    // Since our rows begin at 1 and increase going down the map, we reverse the usual
+    // counterclockwise rotation that happens when you multiply by i.  Suppose you start facing
+    // right, { re: 1, im: 0 }, and you want to turn left, so that you're now facing up.  The
+    // result needs to be { re: 0, im: -1 } in order to move up the map by successively adding the
+    // delta that is being used to represent the direction.  This is opposite from what normally
+    // happens when you multiply by i.
+    const TURN_LEFT: Pos = Pos::new(-1, 0);
+    const TURN_RIGHT: Pos = Pos::new(1, 0);
+}
+
+impl State for Flat {
+    fn facing_right(pos: Pos) -> Self {
+        Self {
+            pos,
+            dir: Pos::new(0, 1),
+        }
+    }
+
+    fn position(&self) -> (Pos, Pos) {
+        let Self { pos, dir } = self;
+        (*pos, *dir)
+    }
 
     fn step(self, mv: Move, notes: &Notes) -> Self {
         let Self { mut pos, mut dir } = self;
 
         match mv {
-            Move::TurnLeft => dir = dir * Self::TURN_LEFT,
-            Move::TurnRight => dir = dir * Self::TURN_RIGHT,
+            TurnLeft => dir = dir * Self::TURN_LEFT,
+            TurnRight => dir = dir * Self::TURN_RIGHT,
 
-            Move::Forward(mut n) => {
+            Forward(mut n) => {
                 while n > 0 {
                     let (moved, next_pos) = notes.attempt_move(pos, dir);
 
@@ -316,25 +324,49 @@ impl State {
     }
 }
 
+struct Cube;
+
+impl State for Cube {
+    fn position(&self) -> (Pos, Pos) {
+        (Pos::new(0, 0), Pos::new(0, 0))
+    }
+
+    fn facing_right(_pos: Pos) -> Self {
+        Self
+    }
+
+    fn password(&self) -> Int {
+        5031
+    }
+
+    fn step(self, _mv: Move, _notes: &Notes) -> Self {
+        Self
+    }
+}
+
 struct Task {
     notes: Notes,
 }
 
 impl Task {
     fn part1(&self) -> Int {
+        self.password::<Flat>()
+    }
+
+    fn part2(&self) -> Int {
+        self.password::<Cube>()
+    }
+
+    fn password<S: State>(&self) -> Int {
         let pos = self.notes.starting_position();
         let mut moves = self.notes.path.iter().rev().copied().collect::<Vec<_>>();
-        let mut state = State::facing_right(pos);
+        let mut state = S::facing_right(pos);
 
         while let Some(mv) = moves.pop() {
             state = state.step(mv, &self.notes);
         }
 
         state.password()
-    }
-
-    fn part2(&self) -> Int {
-        5031
     }
 }
 
@@ -358,6 +390,8 @@ mod tests {
     fn parsing() {
         let input = include_str!("../data/example.txt");
         let notes = parse(input).unwrap();
+
+        assert_eq!(notes.side, 4);
 
         assert_eq!(notes.map.rows.last().unwrap().0.len(), 16);
         assert_eq!(
@@ -400,6 +434,8 @@ mod tests {
     fn input() {
         let input = include_str!("../data/input.txt");
         let notes = parse(input).unwrap();
+
+        assert_eq!(notes.side, 50);
 
         let path = notes.path.clone();
         let n = path.len();
