@@ -29,6 +29,7 @@ use itertools::Itertools;
 use num::complex::Complex;
 use regex::Regex;
 use std::{
+    collections::HashMap,
     fmt::{Debug, Write},
     io::{self, Read},
     ops::{Add, Mul},
@@ -36,7 +37,7 @@ use std::{
 
 type Int = i32;
 
-#[derive(Copy, Clone, Eq, PartialEq)]
+#[derive(Copy, Clone, Eq, Hash, PartialEq)]
 struct Pos(Complex<Int>);
 
 impl Debug for Pos {
@@ -133,9 +134,13 @@ impl Debug for Map {
 #[derive(Debug)]
 struct Notes {
     map: Map,
+    path: Vec<Move>,
     #[allow(unused)]
     side: usize,
-    path: Vec<Move>,
+    #[allow(unused)]
+    quads_move: [[(usize, usize); 4]; 6],
+    #[allow(unused)]
+    quads_id: HashMap<Pos, usize>,
 }
 
 impl Notes {
@@ -189,6 +194,17 @@ impl Notes {
         unreachable!()
     }
 }
+
+fn quad(pos: Pos, side: i32) -> Pos {
+    Pos::new((pos.0.im + side) / side, (pos.0.re + side) / side)
+}
+
+const DXY: [Pos; 4] = [
+    Pos::new(1, 0),
+    Pos::new(0, 1),
+    Pos::new(-1, 0),
+    Pos::new(0, -1),
+];
 
 fn parse(s: &str) -> Result<Notes> {
     let mut rows = vec![];
@@ -252,10 +268,74 @@ fn parse(s: &str) -> Result<Notes> {
         return Err(eyre!("bad dimensions"));
     }
 
+    let mut quads_move = [[Option::<(usize, usize)>::None; 4]; 6];
+    let mut quads_id = HashMap::new();
+
+    for (row_id, row) in rows.iter().enumerate() {
+        for (col_id, cell) in row.0.iter().enumerate() {
+            if cell == &Square::Nothing {
+                continue;
+            }
+            let pos = Pos::new(row_id as i32, col_id as i32);
+            let id = quad(pos, side as i32);
+            let n = quads_id.len();
+            quads_id.entry(id).or_insert_with(|| n);
+        }
+    }
+
+    assert_eq!(quads_id.len(), 6);
+    let mut missing = 6 * 4;
+
+    for (&pos, quad_id) in quads_id.iter() {
+        for (dir, &dxy) in DXY.iter().enumerate() {
+            let pos_next = pos + dxy;
+
+            if let Some(&next_quad_id) = quads_id.get(&pos_next) {
+                quads_move[*quad_id][dir] = Some((next_quad_id, dir));
+                missing -= 1;
+            }
+        }
+    }
+
+    while missing > 0 {
+        for quad_id in 0..6 {
+            for dir in 0..4 {
+                if quads_move[quad_id][dir].is_some() {
+                    continue;
+                }
+
+                let dir_left = (dir + 3) % 4;
+
+                if let Some((next_quad_id, dir_next)) = quads_move[quad_id][dir_left] {
+                    let dir_right = (dir_next + 1) % 4;
+
+                    if let Some((next_quad_id, dir_next)) = quads_move[next_quad_id][dir_right] {
+                        let dir_left = (dir_next + 3) % 4;
+                        quads_move[quad_id][dir] = Some((next_quad_id, dir_left));
+                        missing -= 1;
+                    }
+                }
+            }
+        }
+    }
+
+    // Convert 2d array of Option<(usize, usize)> to 2d array of (usize, usize)
+    let quads_move = {
+        let mut target = [[(0, 0); 4]; 6];
+        for (src, dst) in quads_move.into_iter().zip(target.iter_mut()) {
+            for (src, dst) in src.into_iter().zip(dst.iter_mut()) {
+                *dst = src.unwrap();
+            }
+        }
+        target
+    };
+
     Ok(Notes {
         map: Map { rows, width },
         side,
         path,
+        quads_id,
+        quads_move,
     })
 }
 
