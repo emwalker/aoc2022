@@ -4,13 +4,14 @@
 //   the number of cells to find the length of a side.  Inneficient iteration over path commands.
 // - https://github.com/idanarye/aoc-2022/blob/main/src/day22.rs
 //   Revisit.  Ranges for row and column indexes.  Regex for parsing commands.  Index trait.
-//   Generic solution.
+//   Generic in dimensions.  .
+// - https://github.com/jchevertonwynne/advent-of-code-2022/blob/main/src/days/day22.rs
+//   Use of a hash map with a fast hasher for the world map, not inserting anything into the map
+//   for the blank regions.  Generic in dimensions (?).  Hard-coded in arrangement of faces to one
+//   another (?).
 // - https://github.com/Crazytieguy/advent-of-code/blob/master/2022/src/bin/day22/main.rs
 //   Use of Rotation(Clockwise).  Use of Turn(Rotation).  Hard-coded in dimensions.  Hard coded in
 //   shape.
-// - https://github.com/jchevertonwynne/advent-of-code-2022/blob/main/src/days/day22.rs
-//   Use of a hash map with a fast hasher for the world map, not inserting anything into the map
-//   for the blank regions.
 // - https://github.com/sanraith/aoc2022/blob/aa33a4a7a8dfe6e522a5fe6af39c17b35892e465/aoc-lib/src/solutions/year2022/day22.rs
 //   Has a context utility for printing out progress.  Generic solution.
 // - https://github.com/HoshigaIkaro/aoc-2022/blob/main/src/days/day_22.rs
@@ -52,17 +53,26 @@ impl Add for Pos {
     }
 }
 
-impl Pos {
-    const fn new(im: Int, re: Int) -> Self {
-        Self(Complex { re, im })
-    }
-}
-
 impl Mul for Pos {
     type Output = Self;
 
     fn mul(self, rhs: Self) -> Self::Output {
         Self(self.0 * rhs.0)
+    }
+}
+
+impl Pos {
+    // Since our rows begin at 1 and increase going down the map, we reverse the usual
+    // counterclockwise rotation that happens when you multiply by i.  Suppose you start facing
+    // right, { re: 1, im: 0 }, and you want to turn left, so that you're now facing up.  The
+    // result needs to be { re: 0, im: -1 } in order to move up the map by successively adding the
+    // delta that is being used to represent the direction.  This is opposite from what normally
+    // happens when you multiply by i.
+    const TURN_LEFT: Self = Self::new(-1, 0);
+    const TURN_RIGHT: Self = Self::new(1, 0);
+
+    const fn new(im: Int, re: Int) -> Self {
+        Self(Complex { re, im })
     }
 }
 
@@ -87,8 +97,7 @@ impl Debug for Square {
 #[derive(Debug, Eq, PartialEq, Copy, Clone)]
 enum Move {
     Forward(Int),
-    TurnLeft,
-    TurnRight,
+    Turn(Pos),
 }
 use Move::*;
 
@@ -219,8 +228,8 @@ fn parse(s: &str) -> Result<Notes> {
         .flat_map(|cap| {
             if let Some(s) = cap.get(0) {
                 match s.as_str() {
-                    "L" => Some(TurnLeft),
-                    "R" => Some(TurnRight),
+                    "L" => Some(Turn(Pos::TURN_LEFT)),
+                    "R" => Some(Turn(Pos::TURN_RIGHT)),
                     n => Some(Forward(n.parse::<Int>().expect("an integer"))),
                 }
             } else {
@@ -275,17 +284,6 @@ struct Flat {
     dir: Pos,
 }
 
-impl Flat {
-    // Since our rows begin at 1 and increase going down the map, we reverse the usual
-    // counterclockwise rotation that happens when you multiply by i.  Suppose you start facing
-    // right, { re: 1, im: 0 }, and you want to turn left, so that you're now facing up.  The
-    // result needs to be { re: 0, im: -1 } in order to move up the map by successively adding the
-    // delta that is being used to represent the direction.  This is opposite from what normally
-    // happens when you multiply by i.
-    const TURN_LEFT: Pos = Pos::new(-1, 0);
-    const TURN_RIGHT: Pos = Pos::new(1, 0);
-}
-
 impl State for Flat {
     fn facing_right(pos: Pos) -> Self {
         Self {
@@ -303,8 +301,7 @@ impl State for Flat {
         let Self { mut pos, mut dir } = self;
 
         match mv {
-            TurnLeft => dir = dir * Self::TURN_LEFT,
-            TurnRight => dir = dir * Self::TURN_RIGHT,
+            Turn(rotor) => dir = dir * rotor,
 
             Forward(mut n) => {
                 while n > 0 {
@@ -398,17 +395,17 @@ mod tests {
             notes.path,
             &[
                 Move::Forward(10),
-                Move::TurnRight,
+                Move::Turn(Pos::TURN_RIGHT),
                 Move::Forward(5),
-                Move::TurnLeft,
+                Move::Turn(Pos::TURN_LEFT),
                 Move::Forward(5),
-                Move::TurnRight,
+                Move::Turn(Pos::TURN_RIGHT),
                 Move::Forward(10),
-                Move::TurnLeft,
+                Move::Turn(Pos::TURN_LEFT),
                 Move::Forward(4),
-                Move::TurnRight,
+                Move::Turn(Pos::TURN_RIGHT),
                 Move::Forward(5),
-                Move::TurnLeft,
+                Move::Turn(Pos::TURN_LEFT),
                 Move::Forward(5)
             ]
         );
@@ -440,7 +437,7 @@ mod tests {
         let path = notes.path.clone();
         let n = path.len();
         assert_eq!(path[0], Move::Forward(47));
-        assert_eq!(path[n - 2], Move::TurnLeft);
+        assert_eq!(path[n - 2], Move::Turn(Pos::TURN_LEFT));
         assert_eq!(path[n - 1], Move::Forward(37));
 
         let task = Task { notes };
