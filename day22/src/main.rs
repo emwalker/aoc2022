@@ -32,13 +32,27 @@ use std::{
     collections::{HashMap, HashSet},
     fmt::{Debug, Write},
     io::{self, Read},
-    ops::{Add, Mul},
+    ops::{Add, Mul, Sub},
 };
 
 type Int = i32;
 
 #[derive(Copy, Clone, Eq, Hash, PartialEq)]
 struct Pos(Complex<Int>);
+
+impl PartialOrd for Pos {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Pos {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        let Complex { im: i0, re: j0 } = self.0;
+        let Complex { im: i1, re: j1 } = other.0;
+        (i0, j0).cmp(&(i1, j1))
+    }
+}
 
 impl Debug for Pos {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -51,6 +65,14 @@ impl Add for Pos {
 
     fn add(self, rhs: Self) -> Self::Output {
         Self(self.0 + rhs.0)
+    }
+}
+
+impl Sub for Pos {
+    type Output = Self;
+
+    fn sub(self, rhs: Self) -> Self::Output {
+        Self(self.0 - rhs.0)
     }
 }
 
@@ -67,9 +89,39 @@ impl Pos {
         Self(Complex { im: i, re: j })
     }
 
-    fn face(&self, side: i32) -> FaceId {
-        let pos = Self::new((self.0.im + side) / side, (self.0.re + side) / side);
-        FaceId(pos)
+    fn face(&self, side: Int) -> Face {
+        let Complex { im: i, re: j } = self.0;
+        let pos = Self::new((i + side) / side, (j + side) / side);
+        Face(pos)
+    }
+
+    fn relative(&self, side: Int) -> Pos {
+        let Complex { im: i, re: j } = self.0;
+        Self::new(i.rem_euclid(side), j.rem_euclid(side))
+    }
+
+    fn rotate(&self, old: Dxy, new: Dxy, side: Int) -> Self {
+        // (1, 3), R -> (0, 2), D
+        // (3, 2), D -> (3, 1), U
+        // (0, 2), U -> (2, 0), R
+        // (2, 0), L -> (0, 2), D
+        // (2, 0), L -> (2, 3), R
+        let Complex { im: i, re: j } = self.0;
+
+        match (old, new) {
+            (Dxy::DOWN, Dxy::LEFT) => Self::new(j, i),
+            (Dxy::DOWN, Dxy::UP) => Self::new(i, side - j - 1),
+            (Dxy::LEFT, Dxy::DOWN) => Self::new(j, i),
+            (Dxy::LEFT, Dxy::RIGHT) => Self::new(i, side - j - 1),
+            (Dxy::RIGHT, Dxy::DOWN) => Self::new(side - j - 1, side - i - 1),
+            (Dxy::RIGHT, Dxy::LEFT) => Self::new(side - j - 1, side - i - 1),
+            (Dxy::RIGHT, Dxy::UP) => Self::new(j, i),
+            (Dxy::UP, Dxy::LEFT) => Self::new(side - j - 1, side - i - 1),
+            (Dxy::UP, Dxy::RIGHT) => Self::new(j, i),
+            (Dxy::UP, Dxy::UP) => Self::new(i, j),
+            (Dxy::DOWN, Dxy::DOWN) => Self::new(i, j),
+            _ => panic!("{:?} -> {:?}", old, new),
+        }
     }
 }
 
@@ -77,11 +129,11 @@ impl Pos {
 struct Dxy(Pos);
 
 impl Dxy {
-    const NORTH: Dxy = Dxy::new(-1, 0);
-    const EAST: Dxy = Dxy::new(0, 1);
-    const SOUTH: Dxy = Dxy::new(1, 0);
-    const WEST: Dxy = Dxy::new(0, -1);
-    const DIRECTIONS: [Dxy; 4] = [Self::SOUTH, Self::EAST, Self::NORTH, Self::WEST];
+    const UP: Dxy = Dxy::new(-1, 0);
+    const RIGHT: Dxy = Dxy::new(0, 1);
+    const DOWN: Dxy = Dxy::new(1, 0);
+    const LEFT: Dxy = Dxy::new(0, -1);
+    const DIRECTIONS: [Dxy; 4] = [Self::DOWN, Self::RIGHT, Self::UP, Self::LEFT];
 
     const fn new(im: Int, re: Int) -> Self {
         Self(Pos::new(im, re))
@@ -89,10 +141,10 @@ impl Dxy {
 
     fn idx(&self) -> Int {
         match *self {
-            Self::EAST => 0,
-            Self::SOUTH => 1,
-            Self::NORTH => 2,
-            Self::WEST => 3,
+            Self::RIGHT => 0,
+            Self::DOWN => 1,
+            Self::LEFT => 2,
+            Self::UP => 3,
             _ => panic!("not a direction"),
         }
     }
@@ -107,7 +159,7 @@ impl Dxy {
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-struct Dir(Complex<i32>);
+struct Dir(Complex<Int>);
 
 impl Dir {
     // Since our rows begin at 1 and increase going down the map, we reverse the usual
@@ -119,13 +171,25 @@ impl Dir {
     const LEFT: Self = Self::new(-1, 0);
     const RIGHT: Self = Self::new(1, 0);
 
-    const fn new(im: i32, re: i32) -> Self {
+    const fn new(im: Int, re: Int) -> Self {
         Self(Complex { im, re })
     }
 }
 
 #[derive(Copy, Clone, Debug, Eq, Hash, PartialEq)]
-struct FaceId(Pos);
+struct Face(Pos);
+
+impl Face {
+    #[allow(unused)]
+    fn new(i: Int, j: Int) -> Self {
+        Self(Pos::new(i, j))
+    }
+
+    fn top_left_corner(&self, side: Int) -> Pos {
+        let Pos(Complex { im: i, re: j }) = self.0;
+        Pos::new((i - 1) * side, (j - 1) * side)
+    }
+}
 
 #[derive(Eq, PartialEq, Copy, Clone)]
 enum Square {
@@ -152,7 +216,7 @@ enum Move {
 }
 use Move::*;
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct Row(Vec<Square>);
 
 impl Row {
@@ -161,6 +225,7 @@ impl Row {
     }
 }
 
+#[derive(Clone)]
 struct Map {
     rows: Vec<Row>,
     width: Int,
@@ -181,14 +246,12 @@ impl Debug for Map {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct Notes {
     map: Map,
     path: Vec<Move>,
-    #[allow(unused)]
-    side: usize,
-    #[allow(unused)]
-    transitions: HashMap<(FaceId, Dxy), (FaceId, Dxy)>,
+    side: Int,
+    transitions: HashMap<(Face, Dxy), (Face, Dxy)>,
 }
 
 impl Notes {
@@ -206,40 +269,11 @@ impl Notes {
     }
 
     fn val(&self, pos: Pos) -> Option<&Square> {
-        let Pos(Complex { re: j, im: i }) = pos;
-        let h = self.map.rows.len();
-        let i = i.rem_euclid(h as Int);
-
-        let row = self.map.rows.get(i as usize).expect("a row");
-        let j = j.rem_euclid(self.map.width);
-
-        row.0.get(j as usize)
-    }
-
-    fn wrap(&self, pos: Pos) -> Pos {
-        let Pos(Complex { re: j, im: i }) = pos;
-        let h = self.map.rows.len();
-        let i = i.rem_euclid(h as Int);
-        let j = j.rem_euclid(self.map.width);
-
-        Pos::new(i, j)
-    }
-
-    fn attempt_move(&self, pos: Pos, dir: Dxy) -> (bool, Pos) {
-        let mut next_pos = self.wrap(pos + dir.0);
-
-        while next_pos != pos {
-            match self.val(next_pos) {
-                Some(Tile) => return (true, next_pos),
-                Some(Wall) => return (false, pos),
-                Some(Nothing) | None => {
-                    next_pos = self.wrap(next_pos + dir.0);
-                }
-            }
+        let Pos(Complex { im: i, re: j }) = pos;
+        match self.map.rows.get(i as usize) {
+            Some(row) => row.0.get(j as usize),
+            _ => None,
         }
-
-        // We should not reach this point unless there's something wrong with the map or our code.
-        unreachable!()
     }
 }
 
@@ -300,8 +334,8 @@ fn parse(s: &str) -> Result<Notes> {
         return Err(eyre!("bad dimensions"));
     }
 
-    let side = ((count / 6) as f32).sqrt() as usize;
-    if count != 6 * side * side {
+    let side = ((count / 6) as f32).sqrt() as Int;
+    if count as Int != 6 * side * side {
         return Err(eyre!("bad dimensions"));
     }
 
@@ -313,7 +347,7 @@ fn parse(s: &str) -> Result<Notes> {
             if cell == &Square::Nothing {
                 continue;
             }
-            let face = Pos::new(i as i32, j as i32).face(side as i32);
+            let face = Pos::new(i as i32, j as i32).face(side);
             faces.insert(face);
         }
     }
@@ -323,7 +357,7 @@ fn parse(s: &str) -> Result<Notes> {
 
     for &face in &faces {
         for dxy in Dxy::DIRECTIONS {
-            let next_face = FaceId(face.0 + dxy.0);
+            let next_face = Face(face.0 + dxy.0);
 
             if let Some(&next_face) = faces.get(&next_face) {
                 transitions.entry((face, dxy)).or_insert((next_face, dxy));
@@ -366,8 +400,7 @@ fn parse(s: &str) -> Result<Notes> {
 }
 
 trait State {
-    fn facing_east(pos: Pos) -> Self;
-    fn step(self, mv: Move, notes: &Notes) -> Self;
+    fn advance(&mut self) -> &mut Self;
     fn position(&self) -> (Pos, Dxy);
 
     fn password(&self) -> Int {
@@ -379,62 +412,164 @@ trait State {
 struct Flat {
     pos: Pos,
     dxy: Dxy,
+    notes: Notes,
 }
 
 impl State for Flat {
-    fn facing_east(pos: Pos) -> Self {
-        Self {
-            pos,
-            dxy: Dxy::EAST,
-        }
-    }
-
     fn position(&self) -> (Pos, Dxy) {
-        let Self { pos, dxy } = self;
+        let Self { pos, dxy, .. } = self;
         (*pos, *dxy)
     }
 
-    fn step(self, mv: Move, notes: &Notes) -> Self {
-        let Self { mut pos, mut dxy } = self;
+    fn advance(&mut self) -> &mut Self {
+        let mut moves = self.notes.path.iter().rev().copied().collect::<Vec<_>>();
 
+        while let Some(mv) = moves.pop() {
+            self.step(mv);
+        }
+
+        self
+    }
+}
+
+impl Flat {
+    fn new(notes: Notes) -> Self {
+        Self {
+            pos: notes.starting_position(),
+            dxy: Dxy::RIGHT,
+            notes,
+        }
+    }
+
+    fn wrap(&self, pos: Pos) -> Pos {
+        let Pos(Complex { re: j, im: i }) = pos;
+        let h = self.notes.map.rows.len();
+        let i = i.rem_euclid(h as Int);
+        let j = j.rem_euclid(self.notes.map.width);
+
+        Pos::new(i, j)
+    }
+
+    fn attempt_move(&self, pos: Pos, dxy: Dxy) -> (bool, Pos) {
+        let mut next_pos = self.wrap(pos + dxy.0);
+
+        while next_pos != pos {
+            match self.notes.val(next_pos) {
+                Some(Tile) => return (true, next_pos),
+                Some(Wall) => return (false, pos),
+                Some(Nothing) | None => {
+                    next_pos = self.wrap(next_pos + dxy.0);
+                }
+            }
+        }
+
+        // We should not reach this point unless there's something wrong with the map or our code.
+        unreachable!()
+    }
+
+    fn step(&mut self, mv: Move) {
         match mv {
-            Turn(rotor) => dxy = Dxy(dxy.0 * Pos(rotor.0)),
+            Turn(rotor) => self.dxy = Dxy(self.dxy.0 * Pos(rotor.0)),
 
             Forward(mut n) => {
                 while n > 0 {
-                    let (moved, next_pos) = notes.attempt_move(pos, dxy);
+                    let (moved, next_pos) = self.attempt_move(self.pos, self.dxy);
 
                     if !moved {
                         break;
                     }
 
-                    pos = next_pos;
+                    self.pos = next_pos;
                     n -= 1;
                 }
             }
         };
-
-        Self { pos, dxy }
     }
 }
 
-struct Cube;
+struct Cube {
+    pos: Pos,
+    dxy: Dxy,
+    notes: Notes,
+}
 
 impl State for Cube {
     fn position(&self) -> (Pos, Dxy) {
-        (Pos::new(0, 0), Dxy::EAST)
+        (self.pos, self.dxy)
     }
 
-    fn facing_east(_pos: Pos) -> Self {
-        Self
+    fn advance(&mut self) -> &mut Self {
+        let mut moves = self.notes.path.iter().rev().copied().collect::<Vec<_>>();
+
+        while let Some(mv) = moves.pop() {
+            self.step(mv);
+        }
+
+        self
+    }
+}
+
+impl Cube {
+    fn new(notes: Notes) -> Self {
+        Self {
+            pos: notes.starting_position(),
+            dxy: Dxy::RIGHT,
+            notes,
+        }
     }
 
-    fn password(&self) -> Int {
-        5031
+    #[allow(unused)]
+    fn face(&self) -> Face {
+        self.pos.face(self.notes.side)
     }
 
-    fn step(self, _mv: Move, _notes: &Notes) -> Self {
-        Self
+    fn step(&mut self, mv: Move) {
+        match mv {
+            Turn(rotor) => self.dxy = Dxy(self.dxy.0 * Pos(rotor.0)),
+
+            Forward(mut n) => {
+                while n > 0 {
+                    let (moved, next_pos, next_dxy) = self.attempt_move(self.pos, self.dxy, 0);
+                    n -= 1;
+
+                    if !moved {
+                        break;
+                    }
+
+                    self.dxy = next_dxy;
+                    self.pos = next_pos;
+                }
+            }
+        };
+    }
+
+    fn attempt_move(&self, pos: Pos, dxy: Dxy, depth: i8) -> (bool, Pos, Dxy) {
+        let side = self.notes.side;
+        let next_pos = pos + dxy.0;
+
+        match self.notes.val(next_pos) {
+            Some(Tile) => (true, next_pos, dxy),
+            Some(Wall) => (false, pos, dxy),
+
+            Some(Nothing) | None => {
+                if depth > 1 {
+                    // If we reach this point, we did not stitch together the faces of the cube
+                    // correctly from the puzzle input, or the puzzle input is malformed.
+                    unreachable!();
+                }
+
+                let face = pos.face(side);
+                let &(next_face, next_dxy) = self
+                    .notes
+                    .transitions
+                    .get(&(face, dxy))
+                    .expect("a transition");
+
+                let corner = next_face.top_left_corner(side);
+                let next_pos = corner + pos.relative(side).rotate(dxy, next_dxy, side);
+                self.attempt_move(next_pos - next_dxy.0, next_dxy, depth + 1)
+            }
+        }
     }
 }
 
@@ -444,23 +579,11 @@ struct Task {
 
 impl Task {
     fn part1(&self) -> Int {
-        self.password::<Flat>()
+        Flat::new(self.notes.clone()).advance().password()
     }
 
     fn part2(&self) -> Int {
-        self.password::<Cube>()
-    }
-
-    fn password<S: State>(&self) -> Int {
-        let pos = self.notes.starting_position();
-        let mut moves = self.notes.path.iter().rev().copied().collect::<Vec<_>>();
-        let mut state = S::facing_east(pos);
-
-        while let Some(mv) = moves.pop() {
-            state = state.step(mv, &self.notes);
-        }
-
-        state.password()
+        Cube::new(self.notes.clone()).advance().password()
     }
 }
 
@@ -509,6 +632,37 @@ mod tests {
     }
 
     #[test]
+    fn corners() {
+        let input = include_str!("../data/example.txt");
+        let notes = parse(input).unwrap();
+        let side = notes.side;
+
+        let faces = notes
+            .transitions
+            .keys()
+            .map(|(face, _)| face)
+            .collect::<HashSet<_>>();
+
+        let corners = faces
+            .iter()
+            .map(|face| face.top_left_corner(side))
+            .sorted()
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            &corners,
+            &[
+                Pos::new(0, 8),
+                Pos::new(4, 0),
+                Pos::new(4, 4),
+                Pos::new(4, 8),
+                Pos::new(8, 8),
+                Pos::new(8, 12)
+            ]
+        );
+    }
+
+    #[test]
     fn part1() {
         let input = include_str!("../data/example.txt");
         let notes = parse(input).unwrap();
@@ -520,8 +674,88 @@ mod tests {
     fn part2() {
         let input = include_str!("../data/example.txt");
         let notes = parse(input).unwrap();
-        let task = Task { notes };
-        assert_eq!(task.part2(), 5031);
+        let mut moves = notes.path.iter().rev().copied().collect::<Vec<_>>();
+        let mut state = Cube::new(notes);
+
+        state.step(moves.pop().unwrap());
+        assert_eq!(state.face(), Face::new(1, 3));
+        assert_eq!(state.pos, Pos::new(0, 10));
+        assert_eq!(state.dxy, Dxy::RIGHT);
+        assert_eq!(state.password(), 1044);
+
+        state.step(moves.pop().unwrap());
+        assert_eq!(state.face(), Face::new(1, 3));
+        assert_eq!(state.pos, Pos::new(0, 10));
+        assert_eq!(state.dxy, Dxy::DOWN);
+        assert_eq!(state.password(), 1045);
+
+        state.step(moves.pop().unwrap());
+        assert_eq!(state.face(), Face::new(2, 3));
+        assert_eq!(state.pos, Pos::new(5, 10));
+        assert_eq!(state.dxy, Dxy::DOWN);
+        assert_eq!(state.password(), 6045);
+
+        state.step(moves.pop().unwrap());
+        assert_eq!(state.face(), Face::new(2, 3));
+        assert_eq!(state.pos, Pos::new(5, 10));
+        assert_eq!(state.dxy, Dxy::RIGHT);
+        assert_eq!(state.password(), 6044);
+
+        state.step(moves.pop().unwrap());
+        assert_eq!(state.face(), Face::new(3, 4));
+        assert_eq!(state.pos, Pos::new(10, 14));
+        assert_eq!(state.dxy, Dxy::DOWN);
+        assert_eq!(state.password(), 11061);
+
+        state.step(moves.pop().unwrap());
+        assert_eq!(state.face(), Face::new(3, 4));
+        assert_eq!(state.pos, Pos::new(10, 14));
+        assert_eq!(state.dxy, Dxy::LEFT);
+        assert_eq!(state.password(), 11062);
+
+        state.step(moves.pop().unwrap());
+        assert_eq!(state.face(), Face::new(3, 3));
+        assert_eq!(state.pos, Pos::new(10, 10));
+        assert_eq!(state.dxy, Dxy::LEFT);
+        assert_eq!(state.password(), 11046);
+
+        state.step(moves.pop().unwrap());
+        assert_eq!(state.face(), Face::new(3, 3));
+        assert_eq!(state.pos, Pos::new(10, 10));
+        assert_eq!(state.dxy, Dxy::DOWN);
+        assert_eq!(state.password(), 11045);
+
+        state.step(moves.pop().unwrap());
+        assert_eq!(state.face(), Face::new(2, 1));
+        assert_eq!(state.pos, Pos::new(5, 1));
+        assert_eq!(state.dxy, Dxy::UP);
+        assert_eq!(state.password(), 6011);
+
+        state.step(moves.pop().unwrap());
+        assert_eq!(state.face(), Face::new(2, 1));
+        assert_eq!(state.pos, Pos::new(5, 1));
+        assert_eq!(state.dxy, Dxy::RIGHT);
+        assert_eq!(state.password(), 6008);
+
+        state.step(moves.pop().unwrap());
+        assert_eq!(state.face(), Face::new(2, 2));
+        assert_eq!(state.pos, Pos::new(5, 6));
+        assert_eq!(state.dxy, Dxy::RIGHT);
+        assert_eq!(state.password(), 6028);
+
+        state.step(moves.pop().unwrap());
+        assert_eq!(state.face(), Face::new(2, 2));
+        assert_eq!(state.pos, Pos::new(5, 6));
+        assert_eq!(state.dxy, Dxy::UP);
+        assert_eq!(state.password(), 6031);
+
+        state.step(moves.pop().unwrap());
+        assert_eq!(state.face(), Face::new(2, 2));
+        assert_eq!(state.pos, Pos::new(4, 6));
+        assert_eq!(state.dxy, Dxy::UP);
+        assert_eq!(state.password(), 5031);
+
+        assert!(moves.is_empty());
     }
 
     #[test]
@@ -539,5 +773,7 @@ mod tests {
 
         let task = Task { notes };
         assert_eq!(task.part1(), 1428);
+        // TODO: Generalize translation of coordinates
+        assert_eq!(task.part2(), 165014);
     }
 }
