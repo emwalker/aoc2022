@@ -29,7 +29,7 @@ use itertools::Itertools;
 use num::complex::Complex;
 use regex::Regex;
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fmt::{Debug, Write},
     io::{self, Read},
     ops::{Add, Mul},
@@ -63,23 +63,73 @@ impl Mul for Pos {
 }
 
 impl Pos {
+    const fn new(i: Int, j: Int) -> Self {
+        Self(Complex { im: i, re: j })
+    }
+
+    fn face(&self, side: i32) -> FaceId {
+        let pos = Self::new((self.0.im + side) / side, (self.0.re + side) / side);
+        FaceId(pos)
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, Hash, PartialEq)]
+struct Dxy(Pos);
+
+impl Dxy {
+    const NORTH: Dxy = Dxy::new(-1, 0);
+    const EAST: Dxy = Dxy::new(0, 1);
+    const SOUTH: Dxy = Dxy::new(1, 0);
+    const WEST: Dxy = Dxy::new(0, -1);
+    const DIRECTIONS: [Dxy; 4] = [Self::SOUTH, Self::EAST, Self::NORTH, Self::WEST];
+
+    const fn new(im: Int, re: Int) -> Self {
+        Self(Pos::new(im, re))
+    }
+
+    fn idx(&self) -> Int {
+        match *self {
+            Self::EAST => 0,
+            Self::SOUTH => 1,
+            Self::NORTH => 2,
+            Self::WEST => 3,
+            _ => panic!("not a direction"),
+        }
+    }
+
+    fn turn_left(&self) -> Self {
+        Self(self.0 * Pos(Dir::LEFT.0))
+    }
+
+    fn turn_right(&self) -> Self {
+        Self(self.0 * Pos(Dir::RIGHT.0))
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+struct Dir(Complex<i32>);
+
+impl Dir {
     // Since our rows begin at 1 and increase going down the map, we reverse the usual
     // counterclockwise rotation that happens when you multiply by i.  Suppose you start facing
     // right, { re: 1, im: 0 }, and you want to turn left, so that you're now facing up.  The
     // result needs to be { re: 0, im: -1 } in order to move up the map by successively adding the
     // delta that is being used to represent the direction.  This is opposite from what normally
     // happens when you multiply by i.
-    const TURN_LEFT: Self = Self::new(-1, 0);
-    const TURN_RIGHT: Self = Self::new(1, 0);
+    const LEFT: Self = Self::new(-1, 0);
+    const RIGHT: Self = Self::new(1, 0);
 
-    const fn new(im: Int, re: Int) -> Self {
-        Self(Complex { re, im })
+    const fn new(im: i32, re: i32) -> Self {
+        Self(Complex { im, re })
     }
 }
 
+#[derive(Copy, Clone, Debug, Eq, Hash, PartialEq)]
+struct FaceId(Pos);
+
 #[derive(Eq, PartialEq, Copy, Clone)]
 enum Square {
-    Open,
+    Tile,
     Wall,
     Nothing,
 }
@@ -88,7 +138,7 @@ use Square::*;
 impl Debug for Square {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Open => write!(f, "."),
+            Self::Tile => write!(f, "."),
             Self::Wall => write!(f, "#"),
             Self::Nothing => write!(f, " "),
         }
@@ -98,7 +148,7 @@ impl Debug for Square {
 #[derive(Debug, Eq, PartialEq, Copy, Clone)]
 enum Move {
     Forward(Int),
-    Turn(Pos),
+    Turn(Dir),
 }
 use Move::*;
 
@@ -138,9 +188,7 @@ struct Notes {
     #[allow(unused)]
     side: usize,
     #[allow(unused)]
-    quads_move: [[(usize, usize); 4]; 6],
-    #[allow(unused)]
-    quads_id: HashMap<Pos, usize>,
+    transitions: HashMap<(FaceId, Dxy), (FaceId, Dxy)>,
 }
 
 impl Notes {
@@ -151,7 +199,7 @@ impl Notes {
             .first()
             .expect("a row")
             .squares()
-            .find_position(|&&square| square == Open)
+            .find_position(|&&square| square == Tile)
             .unwrap();
 
         Pos::new(0, j as Int)
@@ -177,15 +225,15 @@ impl Notes {
         Pos::new(i, j)
     }
 
-    fn attempt_move(&self, pos: Pos, dir: Pos) -> (bool, Pos) {
-        let mut next_pos = self.wrap(pos + dir);
+    fn attempt_move(&self, pos: Pos, dir: Dxy) -> (bool, Pos) {
+        let mut next_pos = self.wrap(pos + dir.0);
 
         while next_pos != pos {
             match self.val(next_pos) {
-                Some(Open) => return (true, next_pos),
+                Some(Tile) => return (true, next_pos),
                 Some(Wall) => return (false, pos),
                 Some(Nothing) | None => {
-                    next_pos = self.wrap(next_pos + dir);
+                    next_pos = self.wrap(next_pos + dir.0);
                 }
             }
         }
@@ -194,17 +242,6 @@ impl Notes {
         unreachable!()
     }
 }
-
-fn quad(pos: Pos, side: i32) -> Pos {
-    Pos::new((pos.0.im + side) / side, (pos.0.re + side) / side)
-}
-
-const DXY: [Pos; 4] = [
-    Pos::new(1, 0),
-    Pos::new(0, 1),
-    Pos::new(-1, 0),
-    Pos::new(0, -1),
-];
 
 fn parse(s: &str) -> Result<Notes> {
     let mut rows = vec![];
@@ -222,7 +259,7 @@ fn parse(s: &str) -> Result<Notes> {
         for c in line.chars() {
             let square = match c {
                 ' ' => Nothing,
-                '.' => Open,
+                '.' => Tile,
                 '#' => Wall,
                 _ => return Err(eyre!("unknown square: {}", c)),
             };
@@ -244,8 +281,8 @@ fn parse(s: &str) -> Result<Notes> {
         .flat_map(|cap| {
             if let Some(s) = cap.get(0) {
                 match s.as_str() {
-                    "L" => Some(Turn(Pos::TURN_LEFT)),
-                    "R" => Some(Turn(Pos::TURN_RIGHT)),
+                    "L" => Some(Turn(Dir::LEFT)),
+                    "R" => Some(Turn(Dir::RIGHT)),
                     n => Some(Forward(n.parse::<Int>().expect("an integer"))),
                 }
             } else {
@@ -256,7 +293,7 @@ fn parse(s: &str) -> Result<Notes> {
 
     let count = rows
         .iter()
-        .flat_map(|r| r.squares().filter(|s| matches!(s, Open | Wall)))
+        .flat_map(|r| r.squares().filter(|s| matches!(s, Tile | Wall)))
         .count();
 
     if count % 6 != 0 {
@@ -268,50 +305,51 @@ fn parse(s: &str) -> Result<Notes> {
         return Err(eyre!("bad dimensions"));
     }
 
-    let mut quads_move = [[Option::<(usize, usize)>::None; 4]; 6];
-    let mut quads_id = HashMap::new();
+    let mut transitions = HashMap::new();
+    let mut faces = HashSet::new();
 
-    for (row_id, row) in rows.iter().enumerate() {
-        for (col_id, cell) in row.0.iter().enumerate() {
+    for (i, row) in rows.iter().enumerate() {
+        for (j, cell) in row.0.iter().enumerate() {
             if cell == &Square::Nothing {
                 continue;
             }
-            let pos = Pos::new(row_id as i32, col_id as i32);
-            let id = quad(pos, side as i32);
-            let n = quads_id.len();
-            quads_id.entry(id).or_insert_with(|| n);
+            let face = Pos::new(i as i32, j as i32).face(side as i32);
+            faces.insert(face);
         }
     }
 
-    assert_eq!(quads_id.len(), 6);
+    assert_eq!(faces.len(), 6);
     let mut missing = 6 * 4;
 
-    for (&pos, quad_id) in quads_id.iter() {
-        for (dir, &dxy) in DXY.iter().enumerate() {
-            let pos_next = pos + dxy;
+    for &face in &faces {
+        for dxy in Dxy::DIRECTIONS {
+            let next_face = FaceId(face.0 + dxy.0);
 
-            if let Some(&next_quad_id) = quads_id.get(&pos_next) {
-                quads_move[*quad_id][dir] = Some((next_quad_id, dir));
+            if let Some(&next_face) = faces.get(&next_face) {
+                transitions.entry((face, dxy)).or_insert((next_face, dxy));
                 missing -= 1;
             }
         }
     }
 
     while missing > 0 {
-        for quad_id in 0..6 {
-            for dir in 0..4 {
-                if quads_move[quad_id][dir].is_some() {
+        for &face in &faces {
+            for dxy in Dxy::DIRECTIONS {
+                if transitions.get(&(face, dxy)).is_some() {
                     continue;
                 }
 
-                let dir_left = (dir + 3) % 4;
+                let move_left = dxy.turn_left();
 
-                if let Some((next_quad_id, dir_next)) = quads_move[quad_id][dir_left] {
-                    let dir_right = (dir_next + 1) % 4;
+                if let Some(&(next_face, next_dxy)) = transitions.get(&(face, move_left)) {
+                    let move_right = next_dxy.turn_right();
 
-                    if let Some((next_quad_id, dir_next)) = quads_move[next_quad_id][dir_right] {
-                        let dir_left = (dir_next + 3) % 4;
-                        quads_move[quad_id][dir] = Some((next_quad_id, dir_left));
+                    if let Some(&(next_face, next_dxy)) = transitions.get(&(next_face, move_right))
+                    {
+                        let move_left = next_dxy.turn_left();
+                        transitions
+                            .entry((face, dxy))
+                            .or_insert((next_face, move_left));
                         missing -= 1;
                     }
                 }
@@ -319,73 +357,52 @@ fn parse(s: &str) -> Result<Notes> {
         }
     }
 
-    // Convert 2d array of Option<(usize, usize)> to 2d array of (usize, usize)
-    let quads_move = {
-        let mut target = [[(0, 0); 4]; 6];
-        for (src, dst) in quads_move.into_iter().zip(target.iter_mut()) {
-            for (src, dst) in src.into_iter().zip(dst.iter_mut()) {
-                *dst = src.unwrap();
-            }
-        }
-        target
-    };
-
     Ok(Notes {
         map: Map { rows, width },
         side,
         path,
-        quads_id,
-        quads_move,
+        transitions,
     })
 }
 
 trait State {
-    fn facing_right(pos: Pos) -> Self;
+    fn facing_east(pos: Pos) -> Self;
     fn step(self, mv: Move, notes: &Notes) -> Self;
-    fn position(&self) -> (Pos, Pos);
+    fn position(&self) -> (Pos, Dxy);
 
     fn password(&self) -> Int {
-        let (Pos(Complex { re: j, im: i }), dir) = self.position();
-
-        let facing = match dir {
-            Pos(Complex { re: 1, im: 0 }) => 0,
-            Pos(Complex { re: 0, im: 1 }) => 1,
-            Pos(Complex { re: -1, im: 0 }) => 2,
-            Pos(Complex { re: 0, im: -1 }) => 3,
-            _ => unreachable!(),
-        };
-
-        (i + 1) * 1000 + (j + 1) * 4 + facing
+        let (Pos(Complex { re: j, im: i }), dxy) = self.position();
+        (i + 1) * 1000 + (j + 1) * 4 + dxy.idx()
     }
 }
 
 struct Flat {
     pos: Pos,
-    dir: Pos,
+    dxy: Dxy,
 }
 
 impl State for Flat {
-    fn facing_right(pos: Pos) -> Self {
+    fn facing_east(pos: Pos) -> Self {
         Self {
             pos,
-            dir: Pos::new(0, 1),
+            dxy: Dxy::EAST,
         }
     }
 
-    fn position(&self) -> (Pos, Pos) {
-        let Self { pos, dir } = self;
-        (*pos, *dir)
+    fn position(&self) -> (Pos, Dxy) {
+        let Self { pos, dxy } = self;
+        (*pos, *dxy)
     }
 
     fn step(self, mv: Move, notes: &Notes) -> Self {
-        let Self { mut pos, mut dir } = self;
+        let Self { mut pos, mut dxy } = self;
 
         match mv {
-            Turn(rotor) => dir = dir * rotor,
+            Turn(rotor) => dxy = Dxy(dxy.0 * Pos(rotor.0)),
 
             Forward(mut n) => {
                 while n > 0 {
-                    let (moved, next_pos) = notes.attempt_move(pos, dir);
+                    let (moved, next_pos) = notes.attempt_move(pos, dxy);
 
                     if !moved {
                         break;
@@ -397,18 +414,18 @@ impl State for Flat {
             }
         };
 
-        Self { pos, dir }
+        Self { pos, dxy }
     }
 }
 
 struct Cube;
 
 impl State for Cube {
-    fn position(&self) -> (Pos, Pos) {
-        (Pos::new(0, 0), Pos::new(0, 0))
+    fn position(&self) -> (Pos, Dxy) {
+        (Pos::new(0, 0), Dxy::EAST)
     }
 
-    fn facing_right(_pos: Pos) -> Self {
+    fn facing_east(_pos: Pos) -> Self {
         Self
     }
 
@@ -437,7 +454,7 @@ impl Task {
     fn password<S: State>(&self) -> Int {
         let pos = self.notes.starting_position();
         let mut moves = self.notes.path.iter().rev().copied().collect::<Vec<_>>();
-        let mut state = S::facing_right(pos);
+        let mut state = S::facing_east(pos);
 
         while let Some(mv) = moves.pop() {
             state = state.step(mv, &self.notes);
@@ -475,17 +492,17 @@ mod tests {
             notes.path,
             &[
                 Move::Forward(10),
-                Move::Turn(Pos::TURN_RIGHT),
+                Move::Turn(Dir::RIGHT),
                 Move::Forward(5),
-                Move::Turn(Pos::TURN_LEFT),
+                Move::Turn(Dir::LEFT),
                 Move::Forward(5),
-                Move::Turn(Pos::TURN_RIGHT),
+                Move::Turn(Dir::RIGHT),
                 Move::Forward(10),
-                Move::Turn(Pos::TURN_LEFT),
+                Move::Turn(Dir::LEFT),
                 Move::Forward(4),
-                Move::Turn(Pos::TURN_RIGHT),
+                Move::Turn(Dir::RIGHT),
                 Move::Forward(5),
-                Move::Turn(Pos::TURN_LEFT),
+                Move::Turn(Dir::LEFT),
                 Move::Forward(5)
             ]
         );
@@ -517,7 +534,7 @@ mod tests {
         let path = notes.path.clone();
         let n = path.len();
         assert_eq!(path[0], Move::Forward(47));
-        assert_eq!(path[n - 2], Move::Turn(Pos::TURN_LEFT));
+        assert_eq!(path[n - 2], Move::Turn(Dir::LEFT));
         assert_eq!(path[n - 1], Move::Forward(37));
 
         let task = Task { notes };
