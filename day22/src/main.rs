@@ -100,26 +100,43 @@ impl Pos {
         Self::new(i.rem_euclid(side), j.rem_euclid(side))
     }
 
+    //    00 01 02 03 04 05 06 07 08 09 10 11 12 13 14 15
+    // 00                         .  .  .  #
+    // 01                         .  #  .  .
+    // 02                         #  .  .  .
+    // 03                         .  .  .  .
+    // 04 .  .  .  #  .  .  E  .  .  .  .  #
+    // 05 .  .  .  .  .  .  .  .  #  .  .  A
+    // 06 .  .  #  .  .  .  .  #  .  .  .  .
+    // 07 .  D  .  .  .  .  .  .  .  .  #  .
+    // 08                         .  .  .  #  .  .  B  .
+    // 09                         .  .  .  .  .  #  .  .
+    // 10                         .  #  .  .  .  .  .  .
+    // 11                         .  .  C  .  .  .  #  .
+    //
+    // - At A, and move to the right -> B, facing down
+    //
+    //   top left corner: (8, 12)
+    //   (4, 11)  -> (8, 15)  [4, 4]
+    //   {0, 3}      {0, 3}   [0, side-i-1]
+    //
+    //   (7, 11)  -> (8, 12)  [1, 1]
+    //   {3, 3}      {0, 0}   [0, side-i-1]
+    //
     fn rotate(&self, old: Dxy, new: Dxy, side: Int) -> Self {
-        // (1, 3), R -> (0, 2), D
-        // (3, 2), D -> (3, 1), U
-        // (0, 2), U -> (2, 0), R
-        // (2, 0), L -> (0, 2), D
-        // (2, 0), L -> (2, 3), R
         let Complex { im: i, re: j } = self.0;
 
         match (old, new) {
-            (Dxy::DOWN, Dxy::LEFT) => Self::new(j, i),
-            (Dxy::DOWN, Dxy::UP) => Self::new(i, side - j - 1),
-            (Dxy::LEFT, Dxy::DOWN) => Self::new(j, i),
-            (Dxy::LEFT, Dxy::RIGHT) => Self::new(i, side - j - 1),
-            (Dxy::RIGHT, Dxy::DOWN) => Self::new(side - j - 1, side - i - 1),
-            (Dxy::RIGHT, Dxy::LEFT) => Self::new(side - j - 1, side - i - 1),
-            (Dxy::RIGHT, Dxy::UP) => Self::new(j, i),
-            (Dxy::UP, Dxy::LEFT) => Self::new(side - j - 1, side - i - 1),
-            (Dxy::UP, Dxy::RIGHT) => Self::new(j, i),
-            (Dxy::UP, Dxy::UP) => Self::new(i, j),
-            (Dxy::DOWN, Dxy::DOWN) => Self::new(i, j),
+            (Dxy::DOWN, Dxy::UP) => Self::new(side - 1, side - j - 1),
+            (Dxy::RIGHT, Dxy::DOWN) => Self::new(0, side - i - 1),
+            (Dxy::UP, Dxy::RIGHT) => Self::new(j, 0),
+            (Dxy::UP, Dxy::UP) => Self::new(side - 1, j),
+            (Dxy::DOWN, Dxy::DOWN) => Self::new(0, j),
+            (Dxy::DOWN, Dxy::LEFT) => Self::new(j, side - 1),
+            (Dxy::LEFT, Dxy::DOWN) => Self::new(0, i),
+            (Dxy::LEFT, Dxy::RIGHT) => Self::new(side - i - 1, 0),
+            (Dxy::RIGHT, Dxy::LEFT) => Self::new(side - i - 1, side - 1),
+            (Dxy::RIGHT, Dxy::UP) => Self::new(side - 1, i),
             _ => panic!("{:?} -> {:?}", old, new),
         }
     }
@@ -150,11 +167,11 @@ impl Dxy {
     }
 
     fn turn_left(&self) -> Self {
-        Self(self.0 * Pos(Dir::LEFT.0))
+        Self(self.0 * Pos(Dir::COUNTERCLOCKWISE.0))
     }
 
     fn turn_right(&self) -> Self {
-        Self(self.0 * Pos(Dir::RIGHT.0))
+        Self(self.0 * Pos(Dir::CLOCKWISE.0))
     }
 }
 
@@ -168,8 +185,8 @@ impl Dir {
     // result needs to be { re: 0, im: -1 } in order to move up the map by successively adding the
     // delta that is being used to represent the direction.  This is opposite from what normally
     // happens when you multiply by i.
-    const LEFT: Self = Self::new(-1, 0);
-    const RIGHT: Self = Self::new(1, 0);
+    const COUNTERCLOCKWISE: Self = Self::new(-1, 0);
+    const CLOCKWISE: Self = Self::new(1, 0);
 
     const fn new(im: Int, re: Int) -> Self {
         Self(Complex { im, re })
@@ -212,7 +229,7 @@ impl Debug for Square {
 #[derive(Debug, Eq, PartialEq, Copy, Clone)]
 enum Move {
     Forward(Int),
-    Turn(Dir),
+    Rotate(Dir),
 }
 use Move::*;
 
@@ -315,8 +332,8 @@ fn parse(s: &str) -> Result<Notes> {
         .flat_map(|cap| {
             if let Some(s) = cap.get(0) {
                 match s.as_str() {
-                    "L" => Some(Turn(Dir::LEFT)),
-                    "R" => Some(Turn(Dir::RIGHT)),
+                    "L" => Some(Rotate(Dir::COUNTERCLOCKWISE)),
+                    "R" => Some(Rotate(Dir::CLOCKWISE)),
                     n => Some(Forward(n.parse::<Int>().expect("an integer"))),
                 }
             } else {
@@ -469,7 +486,7 @@ impl Flat {
 
     fn step(&mut self, mv: Move) {
         match mv {
-            Turn(rotor) => self.dxy = Dxy(self.dxy.0 * Pos(rotor.0)),
+            Rotate(rotor) => self.dxy = Dxy(self.dxy.0 * Pos(rotor.0)),
 
             Forward(mut n) => {
                 while n > 0 {
@@ -525,7 +542,7 @@ impl Cube {
 
     fn step(&mut self, mv: Move) {
         match mv {
-            Turn(rotor) => self.dxy = Dxy(self.dxy.0 * Pos(rotor.0)),
+            Rotate(rotor) => self.dxy = Dxy(self.dxy.0 * Pos(rotor.0)),
 
             Forward(mut n) => {
                 while n > 0 {
@@ -615,17 +632,17 @@ mod tests {
             notes.path,
             &[
                 Move::Forward(10),
-                Move::Turn(Dir::RIGHT),
+                Move::Rotate(Dir::CLOCKWISE),
                 Move::Forward(5),
-                Move::Turn(Dir::LEFT),
+                Move::Rotate(Dir::COUNTERCLOCKWISE),
                 Move::Forward(5),
-                Move::Turn(Dir::RIGHT),
+                Move::Rotate(Dir::CLOCKWISE),
                 Move::Forward(10),
-                Move::Turn(Dir::LEFT),
+                Move::Rotate(Dir::COUNTERCLOCKWISE),
                 Move::Forward(4),
-                Move::Turn(Dir::RIGHT),
+                Move::Rotate(Dir::CLOCKWISE),
                 Move::Forward(5),
-                Move::Turn(Dir::LEFT),
+                Move::Rotate(Dir::COUNTERCLOCKWISE),
                 Move::Forward(5)
             ]
         );
@@ -768,12 +785,15 @@ mod tests {
         let path = notes.path.clone();
         let n = path.len();
         assert_eq!(path[0], Move::Forward(47));
-        assert_eq!(path[n - 2], Move::Turn(Dir::LEFT));
+        assert_eq!(path[n - 2], Move::Rotate(Dir::COUNTERCLOCKWISE));
         assert_eq!(path[n - 1], Move::Forward(37));
 
         let task = Task { notes };
         assert_eq!(task.part1(), 1428);
-        // TODO: Generalize translation of coordinates
-        assert_eq!(task.part2(), 165014);
+
+        let p2 = task.part2();
+        assert!(p2 > 41381);
+        assert!(p2 > 124158);
+        assert_eq!(p2, 142380);
     }
 }
