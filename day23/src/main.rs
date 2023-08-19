@@ -211,7 +211,7 @@ impl Proposals {
 
 struct State {
     map: Map,
-    round: usize,
+    round: Int,
     elf_count: usize,
     directions: VecDeque<DijGroup>,
     proposals: Option<Proposals>,
@@ -299,13 +299,17 @@ struct Task {
 
 impl Task {
     fn part1(&self) -> Int {
-        self.advance().empty_tiles()
+        self.advance(10).empty_tiles()
     }
 
-    fn advance(&self) -> State {
+    fn part2(&self) -> Int {
+        self.advance(100_000).round + 1
+    }
+
+    fn advance(&self, rounds: Int) -> State {
         let mut state = self.start();
 
-        while state.can_move() && state.round < 10 {
+        while state.can_move() && state.round < rounds {
             state = state.step()
         }
 
@@ -361,6 +365,7 @@ fn main() -> Result<()> {
     let task = parse(&s)?;
 
     println!("empty tiles: {}", task.part1());
+    println!("number of rounds: {}", task.part2());
 
     Ok(())
 }
@@ -461,6 +466,14 @@ mod tests {
         let task = parse(example()).unwrap();
         let mut state = task.start();
 
+        fn step(mut state: State, steps: usize) -> State {
+            for _ in 0..steps {
+                assert!(state.can_move());
+                state = state.step();
+            }
+            state
+        }
+
         fn normalize(s: &str) -> Vec<&str> {
             s.lines()
                 .map(|l| l.trim())
@@ -484,8 +497,7 @@ mod tests {
              .#..#..",
         );
 
-        assert!(state.can_move());
-        state = state.step();
+        state = step(state, 1);
 
         // Round 1
         assert_same(
@@ -501,8 +513,7 @@ mod tests {
              ..#..#...",
         );
 
-        assert!(state.can_move());
-        state = state.step();
+        state = step(state, 1);
 
         // Round 2
         assert_same(
@@ -518,8 +529,7 @@ mod tests {
              ...#..#....",
         );
 
-        assert!(state.can_move());
-        state = state.step();
+        state = step(state, 1);
 
         // Round 3
         assert_same(
@@ -536,8 +546,7 @@ mod tests {
              ......#....",
         );
 
-        assert!(state.can_move());
-        state = state.step();
+        state = step(state, 1);
 
         // Round 4
         assert_same(
@@ -554,8 +563,7 @@ mod tests {
              ......#....",
         );
 
-        assert!(state.can_move());
-        state = state.step();
+        state = step(state, 1);
 
         // Round 5
         assert_same(
@@ -573,16 +581,7 @@ mod tests {
              ...#..#....",
         );
 
-        assert!(state.can_move());
-        state = state.step();
-        assert!(state.can_move());
-        state = state.step();
-        assert!(state.can_move());
-        state = state.step();
-        assert!(state.can_move());
-        state = state.step();
-        assert!(state.can_move());
-        state = state.step();
+        state = step(state, 5);
 
         // Round 10
         assert_same(
@@ -607,7 +606,26 @@ mod tests {
         assert_eq!(11, height);
         assert_eq!(state.empty_tiles(), 110);
 
-        assert!(state.can_move());
+        let mut state = step(state, 9);
+        assert!(!state.can_move());
+        assert_eq!(state.round, 19);
+
+        // Round 20
+        assert_same(
+            &format!("{:?}", state.map),
+            ".......#......
+             ....#......#..
+             ..#.....#.....
+             ......#.......
+             ...#....#.#..#
+             #.............
+             ....#.....#...
+             ..#.....#.....
+             ....#.#....#..
+             .........#....
+             ....#......#..
+             .......#......",
+        );
     }
 
     #[test]
@@ -619,5 +637,9 @@ mod tests {
         assert!(part1 < 18778);
         assert!(part1 < 4372);
         assert_eq!(part1, 4288);
+
+        let part2 = task.part2();
+        assert!(part2 > 939);
+        assert_eq!(part2, 940);
     }
 }
