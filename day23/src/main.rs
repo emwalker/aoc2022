@@ -1,3 +1,47 @@
+// Other solutions from
+// https://www.reddit.com/r/adventofcode/comments/zt6xz5/2022_day_23_solutions/
+//
+//  - https://www.reddit.com/r/adventofcode/comments/zt6xz5/comment/j2wamb3/ (4.5ms)
+//    Revisit.  SIMD, bit arithmetic, MapWindowsIterator, cartesian_product,
+//    u8x32, slice.rotate_left
+//  - https://www.reddit.com/r/adventofcode/comments/zt6xz5/comment/j1ehk9y/ (76ms)
+//    Revisit. Static DIRECTIONS array and iterating over t..t + 4 to get rotation,
+//    type Pos = (Number, Number), concise solution using a HashSet, set.reserve(n),
+//    kdam progress bar
+//  - https://www.reddit.com/r/adventofcode/comments/zt6xz5/comment/j1f9cz2/ (35ms)
+//    Bit arithmetic, grid of Row([u128; MAX_WORDS]), word.count_ones(), value.trailing_zeros().
+//  - https://www.reddit.com/r/adventofcode/comments/zt6xz5/comment/j1dq8oj/ (135ms)
+//    set.insert(value) #=> bool, concise solution similar to /comments/zt6xz5/comment/j1ehk9y/.
+//  - https://www.reddit.com/r/adventofcode/comments/zt6xz5/comment/j1d1mod/ (160ms)
+//    FxHashMap
+//  - https://www.reddit.com/r/adventofcode/comments/zt6xz5/comment/j1cfrpn/ (355ms)
+//    HashMap, map.drain(), VecDeque for directions
+//  - https://www.reddit.com/r/adventofcode/comments/zt6xz5/comment/j1carq9/ (400ms)
+//    HashSet, set.reserve(n), map of pos -> vec![proposals]
+//  - https://www.reddit.com/r/adventofcode/comments/zt6xz5/comment/j1d2wi5/ (1000ms)
+//    Hand-rolled counter, HashMap of proposals, cycle detection (?)
+//
+// To review:
+//  - https://www.reddit.com/r/adventofcode/comments/zt6xz5/comment/j1co30d/ (1300ms)
+//  - https://www.reddit.com/r/adventofcode/comments/zt6xz5/comment/j1chjsl/ (5000ms)
+//  - https://www.reddit.com/r/adventofcode/comments/zt6xz5/comment/j1cuopt/ (20,000ms)
+//  - https://www.reddit.com/r/adventofcode/comments/zt6xz5/comment/j1cinb1/ (25,000ms)
+//  - https://www.reddit.com/r/adventofcode/comments/zt6xz5/comment/j1ow3uv/ (?s)
+//  - https://www.reddit.com/r/adventofcode/comments/zt6xz5/comment/j1hy780/ (?s)
+//  - https://www.reddit.com/r/adventofcode/comments/zt6xz5/comment/j1eyw80/ (?s)
+//  - https://www.reddit.com/r/adventofcode/comments/zt6xz5/comment/j1exxm6/ (?s)
+//  - https://www.reddit.com/r/adventofcode/comments/zt6xz5/comment/j1dmoft/ (?s)
+//  - https://www.reddit.com/r/adventofcode/comments/zt6xz5/comment/j1dcz3p/ (?s)
+//  - https://www.reddit.com/r/adventofcode/comments/zt6xz5/comment/j1d945r/ (?s)
+//  - https://www.reddit.com/r/adventofcode/comments/zt6xz5/comment/j1cbg9k/ (?s)
+//  - https://www.reddit.com/r/adventofcode/comments/zt6xz5/comment/j1cqqof/ (?s)
+//
+// Changes:
+//  - Simplify parsing code
+//  - Move from VecDeque to static array with i..i+4 index
+//  - Move from BTreeSet to HashSet, drop Ord, PartialOrd
+//  - Switch to SIMD and bit arithmetic
+//
 use color_eyre::Result;
 use counter::Counter;
 use std::{
