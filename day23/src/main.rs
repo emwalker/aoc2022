@@ -38,14 +38,12 @@
 //
 // Changes:
 //  - Simplify parsing code
-//  - Move from VecDeque to static array with i..i+4 index
-//  - Move from BTreeSet to HashSet, drop Ord, PartialOrd
 //  - Switch to SIMD and bit arithmetic
 //
 use color_eyre::Result;
-use counter::Counter;
+use fxhash::FxHashSet;
 use std::{
-    collections::{BTreeSet, VecDeque},
+    collections::HashSet,
     fmt::{Debug, Write},
     io::{self, Read},
     ops::Add,
@@ -67,18 +65,6 @@ impl Add for Pos {
             i: self.i + rhs.i,
             j: self.j + rhs.j,
         }
-    }
-}
-
-impl PartialOrd for Pos {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for Pos {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        (self.i, self.j).cmp(&(other.i, other.j))
     }
 }
 
@@ -126,6 +112,8 @@ impl Dij {
 struct DijGroup(Dij);
 
 impl DijGroup {
+    const DIRECTIONS: [Self; 4] = [Self(Dij::N), Self(Dij::S), Self(Dij::W), Self(Dij::E)];
+
     fn nearby(&self) -> &[Dij; 3] {
         match self.0 {
             Dij::N => &[Dij::N, Dij::NE, Dij::NW],
@@ -142,7 +130,7 @@ impl DijGroup {
 }
 
 #[derive(Clone)]
-struct Map(BTreeSet<Pos>);
+struct Map(FxHashSet<Pos>);
 
 impl Debug for Map {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -199,26 +187,21 @@ impl Map {
         self.0.contains(pos)
     }
 
-    fn clear_in_direction(&self, pos: Pos, dir: &DijGroup) -> bool {
-        dir.nearby().iter().all(|dxy| {
-            let neighor = pos + dxy.0;
-            !self.contains(&neighor)
-        })
-    }
+    fn destination(&self, pos: Pos, round: usize) -> Pos {
+        let adjacent = Dij::DIRECTIONS
+            .iter()
+            .any(|dij| self.contains(&(pos + dij.0)));
 
-    fn clear_around(&self, pos: Pos) -> bool {
-        Dij::DIRECTIONS.iter().all(|dxy| {
-            let neighbor = pos + dxy.0;
-            !self.contains(&neighbor)
-        })
-    }
+        if adjacent {
+            for idx in round..round + 4 {
+                let dir = &DijGroup::DIRECTIONS[idx % 4];
+                if !dir.nearby().iter().any(|dij| self.contains(&(pos + dij.0))) {
+                    return dir.pos() + pos;
+                }
+            }
+        }
 
-    fn remove(&mut self, pos: &Pos) {
-        self.0.remove(pos);
-    }
-
-    fn insert(&mut self, pos: &Pos) {
-        self.0.insert(*pos);
+        pos
     }
 }
 
@@ -235,72 +218,14 @@ impl Proposal {
     }
 }
 
-#[derive(Debug, Eq, PartialEq)]
-struct Proposals(Vec<Proposal>);
-
-impl Proposals {
-    fn can_move(&self) -> bool {
-        !self.0.is_empty()
-    }
-
-    #[allow(unused)]
-    fn len(&self) -> usize {
-        self.0.len()
-    }
-
-    fn iter(&self) -> impl Iterator<Item = &Proposal> {
-        self.0.iter()
-    }
-}
-
 struct State {
     map: Map,
-    round: Int,
+    round: usize,
+    moved: bool,
     elf_count: usize,
-    directions: VecDeque<DijGroup>,
-    proposals: Option<Proposals>,
 }
 
 impl State {
-    fn can_move(&mut self) -> bool {
-        if let Some(proposals) = &self.proposals {
-            return proposals.can_move();
-        }
-
-        let mut sought: Counter<Pos> = Counter::new();
-        let mut possible = vec![];
-
-        for &from in self.map.iter() {
-            if self.map.clear_around(from) {
-                // No need to spread further out
-                sought[&from] += 1;
-                continue;
-            }
-
-            for dir in &self.directions {
-                if !self.map.clear_in_direction(from, dir) {
-                    continue;
-                }
-
-                let to = from + dir.pos();
-                sought[&to] += 1;
-                possible.push(Proposal { from, to });
-                break;
-            }
-        }
-
-        let proposals = Proposals(
-            possible
-                .into_iter()
-                .filter(|proposal| sought[&proposal.to] < 2)
-                .collect::<Vec<_>>(),
-        );
-
-        let res = proposals.can_move();
-        std::mem::swap(&mut self.proposals, &mut Some(proposals));
-        res
-    }
-
     fn empty_tiles(&self) -> Int {
         let elf_count = self.map.len() as Int;
         let (height, width) = self.map.dimensions();
@@ -310,29 +235,38 @@ impl State {
 
     fn step(self) -> Self {
         let Self {
-            proposals,
             round,
-            mut map,
-            mut directions,
+            map,
+            elf_count,
             ..
         } = self;
 
-        for Proposal { from, to } in proposals.expect("can_move() called").iter() {
-            map.remove(from);
-            map.insert(to);
+        let mut next_map = HashSet::default();
+        let mut num_moves = 0;
+
+        for &elf in map.iter() {
+            let next_pos = map.destination(elf, self.round);
+
+            if elf == next_pos {
+                next_map.insert(next_pos);
+            } else if !next_map.insert(next_pos) {
+                // Something else attempted to move there; let's back out the change
+                next_map.remove(&next_pos);
+                next_map.insert(elf);
+                next_map.insert(Pos::new(next_pos.i * 2 - elf.i, next_pos.j * 2 - elf.j));
+                num_moves -= 2;
+            } else {
+                num_moves += 1;
+            }
         }
 
-        let elf_count = map.len();
-        debug_assert_eq!(self.elf_count, elf_count, "unexpected number of elves");
-
-        directions.rotate_left(1);
+        debug_assert_eq!(elf_count, next_map.len());
 
         Self {
-            map,
+            map: Map(next_map),
             round: round + 1,
             elf_count,
-            directions,
-            proposals: None,
+            moved: num_moves != 0,
         }
     }
 }
@@ -346,15 +280,19 @@ impl Task {
         self.advance(10).empty_tiles()
     }
 
-    fn part2(&self) -> Int {
-        self.advance(100_000).round + 1
+    fn part2(&self) -> usize {
+        self.advance(100_000).round
     }
 
-    fn advance(&self, rounds: Int) -> State {
+    fn advance(&self, rounds: usize) -> State {
         let mut state = self.start();
 
-        while state.can_move() && state.round < rounds {
-            state = state.step()
+        for _ in 0..rounds {
+            state = state.step();
+
+            if !state.moved {
+                return state;
+            }
         }
 
         state
@@ -369,35 +307,25 @@ impl Task {
             elf_count,
             round: 0,
             map,
-            proposals: None,
-            directions: VecDeque::from([
-                DijGroup(Dij::N),
-                DijGroup(Dij::S),
-                DijGroup(Dij::W),
-                DijGroup(Dij::E),
-            ]),
+            moved: true,
         }
     }
 }
 
 fn parse(s: &str) -> Result<Task> {
-    let map = s
-        .trim()
-        .lines()
+    let mut map: FxHashSet<Pos> = Default::default();
+    map.reserve(s.len());
+
+    s.lines()
+        .filter(|l| !l.is_empty())
         .enumerate()
-        .flat_map(|(i, l)| {
-            l.trim().chars().enumerate().filter_map(move |(j, c)| {
-                if c == '#' {
-                    Some(Pos {
-                        i: i as Int,
-                        j: j as Int,
-                    })
-                } else {
-                    None
+        .for_each(|(i, l)| {
+            for (j, b) in l.chars().enumerate() {
+                if b == '#' {
+                    map.insert(Pos::new(i as Int, j as Int));
                 }
-            })
-        })
-        .collect::<BTreeSet<Pos>>();
+            }
+        });
 
     let map = Map(map);
     Ok(Task { map })
@@ -422,6 +350,24 @@ mod tests {
         include_str!("../data/example.txt")
     }
 
+    fn step(mut state: State, steps: usize) -> State {
+        for _ in 0..steps {
+            state = state.step();
+        }
+        state
+    }
+
+    fn normalize(s: &str) -> Vec<&str> {
+        s.lines()
+            .map(|l| l.trim())
+            .filter(|l| !l.is_empty())
+            .collect::<Vec<_>>()
+    }
+
+    fn assert_same(left: &str, right: &str) {
+        assert_eq!(normalize(left), normalize(right))
+    }
+
     #[test]
     fn parsing() {
         let task = parse(example()).unwrap();
@@ -429,24 +375,13 @@ mod tests {
     }
 
     #[test]
-    fn can_move() {
-        let task = parse(example()).unwrap();
-        let mut state = task.start();
-        assert!(state.can_move());
-        state = state.step();
-        assert!(state.can_move());
-    }
-
-    #[test]
     fn empty_tiles() {
         let task = parse(example()).unwrap();
         let mut state = task.start();
 
-        assert!(state.can_move());
         assert_eq!(state.empty_tiles(), 27);
 
         state = state.step();
-        assert!(state.can_move());
         assert_eq!(state.empty_tiles(), 59);
     }
 
@@ -463,71 +398,53 @@ mod tests {
         let task = parse(input).unwrap();
         let mut state = task.start();
 
-        fn coords(proposals: &Option<Proposals>) -> Vec<[(Int, Int); 2]> {
-            proposals
-                .as_ref()
-                .unwrap()
-                .iter()
-                .map(|proposal| proposal.coords())
-                .collect()
-        }
-
-        assert!(state.can_move());
-        assert_eq!(
-            coords(&state.proposals),
-            vec![[(1, 2), (0, 2)], [(1, 3), (0, 3)], [(4, 3), (3, 3)]],
+        assert_same(
+            &format!("{:?}", state.map),
+            "##
+             #.
+             ..
+             ##",
         );
 
-        state = state.step();
-        assert!(state.can_move());
-        assert_eq!(
-            coords(&state.proposals),
-            vec![
-                [(0, 2), (1, 2)],
-                [(0, 3), (1, 3)],
-                [(2, 2), (2, 1)],
-                [(3, 3), (3, 4)],
-                [(4, 2), (5, 2)]
-            ],
+        state = step(state, 1);
+
+        assert_same(
+            &format!("{:?}", state.map),
+            "##
+             ..
+             #.
+             .#
+             #.",
         );
 
-        state = state.step();
-        assert!(state.can_move());
-        assert_eq!(
-            coords(&state.proposals),
-            vec![[(1, 2), (0, 2)], [(1, 3), (1, 4)], [(2, 1), (2, 0)]],
+        state = step(state, 1);
+
+        assert_same(
+            &format!("{:?}", state.map),
+            ".##.
+             #...
+             ...#
+             ....
+             .#..",
         );
 
-        state = state.step();
-        assert!(!state.can_move());
+        state = step(state, 1);
 
-        let coords = state.map.iter().map(|pos| pos.coords()).collect::<Vec<_>>();
-        assert_eq!(coords, vec![(0, 2), (1, 4), (2, 0), (3, 4), (5, 2)]);
+        assert_same(
+            &format!("{:?}", state.map),
+            "..#..
+             ....#
+             #....
+             ....#
+             .....
+             ..#..",
+        );
     }
 
     #[test]
     fn part1() {
         let task = parse(example()).unwrap();
         let mut state = task.start();
-
-        fn step(mut state: State, steps: usize) -> State {
-            for _ in 0..steps {
-                assert!(state.can_move());
-                state = state.step();
-            }
-            state
-        }
-
-        fn normalize(s: &str) -> Vec<&str> {
-            s.lines()
-                .map(|l| l.trim())
-                .filter(|l| !l.is_empty())
-                .collect::<Vec<_>>()
-        }
-
-        fn assert_same(left: &str, right: &str) {
-            assert_eq!(normalize(left), normalize(right))
-        }
 
         // Start
         assert_same(
@@ -650,8 +567,7 @@ mod tests {
         assert_eq!(11, height);
         assert_eq!(state.empty_tiles(), 110);
 
-        let mut state = step(state, 9);
-        assert!(!state.can_move());
+        let state = step(state, 9);
         assert_eq!(state.round, 19);
 
         // Round 20
