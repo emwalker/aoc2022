@@ -1,3 +1,4 @@
+#![feature(portable_simd)]
 // Other solutions from
 // https://www.reddit.com/r/adventofcode/comments/zt6xz5/2022_day_23_solutions/
 //
@@ -41,243 +42,266 @@
 //  - Switch to SIMD and bit arithmetic
 //
 use color_eyre::Result;
-use fxhash::{FxHashSet, FxHasher};
+use itertools::{chain, Itertools};
+use std::array;
+use std::collections::VecDeque;
+use std::ops::Range;
+use std::simd::u8x32;
 use std::{
     fmt::{Debug, Write},
-    hash::BuildHasherDefault,
     io::{self, Read},
     ops::Add,
 };
 
-type Int = i32;
+#[derive(Debug, Clone, Copy)]
+enum Direction {
+    North,
+    South,
+    West,
+    East,
+}
+
+use Direction::*;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-struct Pos {
-    i: Int,
-    j: Int,
-}
+struct Pos(usize, usize);
 
 impl Add for Pos {
     type Output = Self;
 
     fn add(self, rhs: Self) -> Self::Output {
-        Self {
-            i: self.i + rhs.i,
-            j: self.j + rhs.j,
-        }
+        Self(self.0 + rhs.0, self.1 + rhs.1)
     }
 }
 
 impl Pos {
     #[allow(unused)]
-    fn new(i: Int, j: Int) -> Self {
-        Self { i, j }
+    fn new(i: usize, j: usize) -> Self {
+        Self(i, j)
     }
 
     #[allow(unused)]
-    fn coords(&self) -> (Int, Int) {
-        (self.i, self.j)
+    fn coords(&self) -> (usize, usize) {
+        (self.0, self.1)
     }
 }
 
-#[derive(Clone, Copy, Eq, PartialEq)]
-struct Dij(Pos);
-
-impl Dij {
-    const N: Self = Self::new(-1, 0);
-    const NE: Self = Self::new(-1, 1);
-    const E: Self = Self::new(0, 1);
-    const SE: Self = Self::new(1, 1);
-    const S: Self = Self::new(1, 0);
-    const SW: Self = Self::new(1, -1);
-    const W: Self = Self::new(0, -1);
-    const NW: Self = Self::new(-1, -1);
-
-    const DIRECTIONS: [Self; 8] = [
-        Self::N,
-        Self::NE,
-        Self::E,
-        Self::SE,
-        Self::S,
-        Self::SW,
-        Self::W,
-        Self::NW,
-    ];
-
-    const fn new(i: Int, j: Int) -> Self {
-        Self(Pos { i, j })
-    }
-}
-
-struct DijGroup(Dij);
-
-impl DijGroup {
-    const DIRECTIONS: [Self; 4] = [Self(Dij::N), Self(Dij::S), Self(Dij::W), Self(Dij::E)];
-
-    fn nearby(&self) -> &[Dij; 3] {
-        match self.0 {
-            Dij::N => &[Dij::N, Dij::NE, Dij::NW],
-            Dij::S => &[Dij::S, Dij::SE, Dij::SW],
-            Dij::E => &[Dij::E, Dij::NE, Dij::SE],
-            Dij::W => &[Dij::W, Dij::NW, Dij::SW],
-            _ => unreachable!(),
-        }
-    }
-
-    fn pos(&self) -> Pos {
-        self.0 .0
-    }
-}
+const WIDTH: usize = 160;
 
 #[derive(Clone)]
-struct Map(FxHashSet<Pos>);
+struct BitGrid([u8x32; WIDTH]);
 
-impl Debug for Map {
+fn shift_west(&row: &u8x32) -> u8x32 {
+    (row >> u8x32::splat(1)) | (row.rotate_lanes_left::<1>() << u8x32::splat(7))
+}
+
+fn shift_east(&row: &u8x32) -> u8x32 {
+    (row << u8x32::splat(1)) | (row.rotate_lanes_right::<1>() >> u8x32::splat(7))
+}
+
+fn propose(
+    [nw, n, ne]: &[u8x32; 3],
+    [w, cur, e]: &[u8x32; 3],
+    [sw, s, se]: &[u8x32; 3],
+    priority: [Direction; 4],
+) -> [u8x32; 4] {
+    let mut propositions = [*cur; 4];
+    let mut not_chosen = nw | n | ne | w | e | sw | s | se;
+    for d in priority {
+        let (row, dir_available) = match d {
+            North => (&mut propositions[0], !(ne | n | nw)),
+            South => (&mut propositions[1], !(se | s | sw)),
+            West => (&mut propositions[2], !(nw | w | sw)),
+            East => (&mut propositions[3], !(ne | e | se)),
+        };
+        *row &= dir_available & not_chosen;
+        not_chosen &= !dir_available;
+    }
+    propositions
+}
+
+fn collide_proposals(
+    [_, south, _, _]: &[u8x32; 4],
+    [_, _, west, east]: &[u8x32; 4],
+    [north, _, _, _]: &[u8x32; 4],
+) -> [u8x32; 4] {
+    [
+        north & !*south,
+        south & !*north,
+        shift_west(west) & !shift_east(east),
+        shift_east(east) & !shift_west(west),
+    ]
+}
+
+impl Debug for BitGrid {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let ((max_i, min_i), (max_j, min_j)) = self.bounds();
-
-        f.write_char('\n')?;
-
-        for i in min_i..=max_i {
-            for j in min_j..=max_j {
-                let pos = Pos::new(i, j);
-                if self.0.contains(&pos) {
-                    f.write_char('#')?;
+        let (rows, cols) = self.bounds();
+        for row in rows {
+            for col in cols.clone() {
+                if self.get(row, col) {
+                    print!("#");
                 } else {
-                    f.write_char('.')?;
+                    print!(".");
                 }
             }
             f.write_char('\n')?;
         }
-
-        Ok(())
+        f.write_char('\n')
     }
 }
 
-impl Map {
+impl BitGrid {
+    fn new() -> Self {
+        Self([Default::default(); WIDTH])
+    }
+
     fn len(&self) -> usize {
         self.0.len()
     }
 
-    fn bounds(&self) -> ((Int, Int), (Int, Int)) {
-        let (mut min_i, mut max_i) = (Int::MAX, Int::MIN);
-        let (mut min_j, mut max_j) = (Int::MAX, Int::MIN);
+    fn bounds(&self) -> (Range<usize>, Range<usize>) {
+        let (mut min_i, mut max_i) = (usize::MAX, usize::MIN);
+        let (mut min_j, mut max_j) = (usize::MAX, usize::MIN);
 
-        for pos in self.iter() {
-            let &Pos { i, j } = pos;
+        for Pos(i, j) in self.iter() {
             min_i = min_i.min(i);
             max_i = max_i.max(i);
             min_j = min_j.min(j);
             max_j = max_j.max(j);
         }
 
-        ((max_i, min_i), (max_j, min_j))
+        (min_i..max_i + 1, min_j..max_j + 1)
     }
 
-    fn dimensions(&self) -> (Int, Int) {
-        let ((max_i, min_i), (max_j, min_j)) = self.bounds();
-        (max_i - min_i + 1, max_j - min_j + 1)
+    fn insert(&mut self, row: usize, col: usize) {
+        self.0[row][col / 8] |= 1 << (col % 8);
     }
 
-    fn iter(&self) -> impl Iterator<Item = &Pos> {
-        self.0.iter()
+    fn get(&self, row: usize, col: usize) -> bool {
+        self.0[row][col / 8] & (1 << (col % 8)) != 0
     }
 
-    fn contains(&self, pos: &Pos) -> bool {
-        self.0.contains(pos)
-    }
-
-    fn destination(&self, pos: Pos, round: usize) -> Pos {
-        let adjacent = Dij::DIRECTIONS
-            .iter()
-            .any(|dij| self.contains(&(pos + dij.0)));
-
-        if adjacent {
-            for idx in round..round + 4 {
-                let dir = &DijGroup::DIRECTIONS[idx % 4];
-                if !dir.nearby().iter().any(|dij| self.contains(&(pos + dij.0))) {
-                    return dir.pos() + pos;
-                }
-            }
-        }
-
-        pos
-    }
-}
-
-#[derive(Debug, Eq, PartialEq)]
-struct Proposal {
-    from: Pos,
-    to: Pos,
-}
-
-impl Proposal {
     #[allow(unused)]
-    fn coords(&self) -> [(Int, Int); 2] {
-        [self.from.coords(), self.to.coords()]
+    fn dimensions(&self) -> (usize, usize) {
+        let (rows, cols) = self.bounds();
+        (rows.len() + 1, cols.len() + 1)
+    }
+
+    fn iter(&self) -> impl Iterator<Item = Pos> + '_ {
+        (0..WIDTH)
+            .cartesian_product(0..256)
+            .filter(|&(row, col)| self.get(row, col))
+            .map(|(i, j)| Pos(i, j))
     }
 }
 
+struct MapWindows<I: Iterator, F, T, const N: usize>
+where
+    F: FnMut([&I::Item; N]) -> T,
+{
+    iter: I,
+    f: F,
+    buf: VecDeque<I::Item>,
+}
+
+impl<I: Iterator, F, T, const N: usize> MapWindows<I, F, T, N>
+where
+    F: FnMut([&I::Item; N]) -> T,
+{
+    fn new(mut iter: I, f: F) -> Self {
+        let buf = iter.by_ref().take(N - 1).collect();
+        Self { iter, f, buf }
+    }
+}
+
+impl<I: Iterator, F, T, const N: usize> Iterator for MapWindows<I, F, T, N>
+where
+    F: FnMut([&I::Item; N]) -> T,
+{
+    type Item = T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.iter.next().map(|next| {
+            self.buf.push_back(next);
+            let res = (self.f)(array::from_fn(|i| &self.buf[i]));
+            self.buf.pop_front();
+            res
+        })
+    }
+}
+
+trait MapWindowsIterator: Iterator {
+    fn map_windows<T, F, const N: usize>(self, f: F) -> MapWindows<Self, F, T, N>
+    where
+        Self: Sized,
+        F: FnMut([&Self::Item; N]) -> T,
+    {
+        MapWindows::new(self, f)
+    }
+}
+
+impl<I: Iterator> MapWindowsIterator for I {}
+
+#[derive(Clone)]
 struct State {
-    map: Map,
+    grid: BitGrid,
     round: usize,
     moved: bool,
-    elf_count: usize,
+    priority: [Direction; 4],
 }
 
 impl State {
-    fn empty_tiles(&self) -> Int {
-        let elf_count = self.map.len() as Int;
-        let (height, width) = self.map.dimensions();
-        assert!(height * width >= elf_count);
-        height * width - elf_count
+    fn empty_tiles(&self) -> usize {
+        let (rows, cols) = self.grid.bounds();
+        rows.len() * cols.len() - self.grid.len()
     }
 
     fn step(self) -> Self {
-        let Self {
+        let State {
+            mut grid,
+            mut priority,
             round,
-            map,
-            elf_count,
             ..
-        } = self;
+        } = self.clone();
 
-        let hasher: BuildHasherDefault<FxHasher> = BuildHasherDefault::default();
-        let mut next_map = FxHashSet::with_capacity_and_hasher(map.len(), hasher);
-        let mut num_moves = 0;
+        let mut moved = false;
+        let zeros = [Default::default(); 2];
 
-        for &elf in map.iter() {
-            let next_pos = map.destination(elf, self.round);
+        chain!(&zeros, &self.grid.0, &zeros)
+            .map(|row| [shift_east(row), *row, shift_west(row)])
+            .map_windows(|[above, cur, below]| propose(above, cur, below, priority))
+            .map_windows(|[above, cur, below]| collide_proposals(above, cur, below))
+            .enumerate()
+            .for_each(|(i, [from_south, from_north, from_east, from_west])| {
+                let destinations = from_north | from_south | from_west | from_east;
+                if destinations == u8x32::splat(0) {
+                    return;
+                }
+                moved = true;
+                grid.0[i + 1] &= !from_south;
+                grid.0[i - 1] &= !from_north;
+                grid.0[i] &= !shift_west(&from_west);
+                grid.0[i] &= !shift_east(&from_east);
+                grid.0[i] |= destinations;
+            });
 
-            if elf == next_pos {
-                next_map.insert(next_pos);
-            } else if !next_map.insert(next_pos) {
-                // Something else attempted to move there; let's back out the change
-                next_map.remove(&next_pos);
-                next_map.insert(elf);
-                next_map.insert(Pos::new(next_pos.i * 2 - elf.i, next_pos.j * 2 - elf.j));
-                num_moves -= 2;
-            } else {
-                num_moves += 1;
-            }
-        }
-
-        debug_assert_eq!(elf_count, next_map.len());
+        priority.rotate_left(1);
 
         Self {
-            map: Map(next_map),
+            grid,
+            priority,
             round: round + 1,
-            elf_count,
-            moved: num_moves != 0,
+            moved,
         }
     }
 }
 
 struct Task {
-    map: Map,
+    grid: BitGrid,
 }
 
 impl Task {
-    fn part1(&self) -> Int {
+    fn part1(&self) -> usize {
         self.advance(10).empty_tiles()
     }
 
@@ -300,40 +324,27 @@ impl Task {
     }
 
     fn start(&self) -> State {
-        let map = self.map.clone();
-        let elf_count = map.len();
-        debug_assert!(elf_count > 0, "expected at least one elf");
+        let grid = self.grid.clone();
 
         State {
-            elf_count,
             round: 0,
-            map,
+            grid,
             moved: true,
+            priority: [North, South, West, East],
         }
     }
 }
 
 fn parse(s: &str) -> Result<Task> {
-    let map = s
-        .trim()
-        .lines()
-        .enumerate()
-        .flat_map(|(i, l)| {
-            l.trim().chars().enumerate().filter_map(move |(j, c)| {
-                if c == '#' {
-                    Some(Pos {
-                        i: i as Int,
-                        j: j as Int,
-                    })
-                } else {
-                    None
-                }
-            })
-        })
-        .collect::<FxHashSet<Pos>>();
+    let mut grid = BitGrid::new();
+    s.lines().enumerate().for_each(|(row, line)| {
+        line.chars()
+            .enumerate()
+            .filter(|&(_, c)| c == '#')
+            .for_each(|(col, _)| grid.insert(row + 24, col + 72))
+    });
 
-    let map = Map(map);
-    Ok(Task { map })
+    Ok(Task { grid })
 }
 
 fn main() -> Result<()> {
@@ -376,7 +387,7 @@ mod tests {
     #[test]
     fn parsing() {
         let task = parse(example()).unwrap();
-        assert_eq!(task.map.len(), 22);
+        assert_eq!(task.grid.len(), 160);
     }
 
     #[test]
@@ -404,7 +415,7 @@ mod tests {
         let mut state = task.start();
 
         assert_same(
-            &format!("{:?}", state.map),
+            &format!("{:?}", state.grid),
             "##
              #.
              ..
@@ -414,7 +425,7 @@ mod tests {
         state = step(state, 1);
 
         assert_same(
-            &format!("{:?}", state.map),
+            &format!("{:?}", state.grid),
             "##
              ..
              #.
@@ -425,7 +436,7 @@ mod tests {
         state = step(state, 1);
 
         assert_same(
-            &format!("{:?}", state.map),
+            &format!("{:?}", state.grid),
             ".##.
              #...
              ...#
@@ -436,7 +447,7 @@ mod tests {
         state = step(state, 1);
 
         assert_same(
-            &format!("{:?}", state.map),
+            &format!("{:?}", state.grid),
             "..#..
              ....#
              #....
@@ -453,7 +464,7 @@ mod tests {
 
         // Start
         assert_same(
-            &format!("{:?}", state.map),
+            &format!("{:?}", state.grid),
             "....#..
              ..###.#
              #...#.#
@@ -467,7 +478,7 @@ mod tests {
 
         // Round 1
         assert_same(
-            &format!("{:?}", state.map),
+            &format!("{:?}", state.grid),
             ".....#...
              ...#...#.
              .#..#.#..
@@ -483,7 +494,7 @@ mod tests {
 
         // Round 2
         assert_same(
-            &format!("{:?}", state.map),
+            &format!("{:?}", state.grid),
             "......#....
              ...#.....#.
              ..#..#.#...
@@ -499,7 +510,7 @@ mod tests {
 
         // Round 3
         assert_same(
-            &format!("{:?}", state.map),
+            &format!("{:?}", state.grid),
             "......#....
              ....#....#.
              .#..#...#..
@@ -516,7 +527,7 @@ mod tests {
 
         // Round 4
         assert_same(
-            &format!("{:?}", state.map),
+            &format!("{:?}", state.grid),
             "......#....
              .....#....#
              .#...##....
@@ -533,7 +544,7 @@ mod tests {
 
         // Round 5
         assert_same(
-            &format!("{:?}", state.map),
+            &format!("{:?}", state.grid),
             "......#....
              ...........
              .#..#.....#
@@ -551,7 +562,7 @@ mod tests {
 
         // Round 10
         assert_same(
-            &format!("{:?}", state.map),
+            &format!("{:?}", state.grid),
             "......#.....
              ..........#.
              .#.#..#.....
@@ -567,7 +578,7 @@ mod tests {
 
         assert_eq!(state.round, 10);
 
-        let (height, width) = state.map.dimensions();
+        let (height, width) = state.grid.dimensions();
         assert_eq!(12, width);
         assert_eq!(11, height);
         assert_eq!(state.empty_tiles(), 110);
@@ -577,7 +588,7 @@ mod tests {
 
         // Round 20
         assert_same(
-            &format!("{:?}", state.map),
+            &format!("{:?}", state.grid),
             ".......#......
              ....#......#..
              ..#.....#.....
