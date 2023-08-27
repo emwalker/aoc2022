@@ -41,10 +41,10 @@
 //  - Switch to SIMD and bit arithmetic
 //
 use color_eyre::Result;
-use fxhash::FxHashSet;
+use fxhash::{FxHashSet, FxHasher};
 use std::{
-    collections::HashSet,
     fmt::{Debug, Write},
+    hash::BuildHasherDefault,
     io::{self, Read},
     ops::Add,
 };
@@ -241,7 +241,8 @@ impl State {
             ..
         } = self;
 
-        let mut next_map = HashSet::default();
+        let hasher: BuildHasherDefault<FxHasher> = BuildHasherDefault::default();
+        let mut next_map = FxHashSet::with_capacity_and_hasher(map.len(), hasher);
         let mut num_moves = 0;
 
         for &elf in map.iter() {
@@ -313,19 +314,23 @@ impl Task {
 }
 
 fn parse(s: &str) -> Result<Task> {
-    let mut map: FxHashSet<Pos> = Default::default();
-    map.reserve(s.len());
-
-    s.lines()
-        .filter(|l| !l.is_empty())
+    let map = s
+        .trim()
+        .lines()
         .enumerate()
-        .for_each(|(i, l)| {
-            for (j, b) in l.chars().enumerate() {
-                if b == '#' {
-                    map.insert(Pos::new(i as Int, j as Int));
+        .flat_map(|(i, l)| {
+            l.trim().chars().enumerate().filter_map(move |(j, c)| {
+                if c == '#' {
+                    Some(Pos {
+                        i: i as Int,
+                        j: j as Int,
+                    })
+                } else {
+                    None
                 }
-            }
-        });
+            })
+        })
+        .collect::<FxHashSet<Pos>>();
 
     let map = Map(map);
     Ok(Task { map })
