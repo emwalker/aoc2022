@@ -1,10 +1,11 @@
-#![feature(portable_simd)]
+// https://adventofcode.com/2022/day/23
+//
 // Other solutions from
 // https://www.reddit.com/r/adventofcode/comments/zt6xz5/2022_day_23_solutions/
 //
 //  - https://www.reddit.com/r/adventofcode/comments/zt6xz5/comment/j2wamb3/ (4.5ms)
 //    Revisit.  SIMD, bit arithmetic, MapWindowsIterator, cartesian_product,
-//    u8x32, slice.rotate_left
+//    SimdVec, slice.rotate_left
 //  - https://www.reddit.com/r/adventofcode/comments/zt6xz5/comment/j1ehk9y/ (76ms)
 //    Revisit. Static DIRECTIONS array and iterating over t..t + 4 to get rotation,
 //    type Pos = (Number, Number), concise solution using a HashSet, set.reserve(n),
@@ -37,13 +38,14 @@
 //  - https://www.reddit.com/r/adventofcode/comments/zt6xz5/comment/j1cbg9k/ (?s)
 //  - https://www.reddit.com/r/adventofcode/comments/zt6xz5/comment/j1cqqof/ (?s)
 //
+#![feature(portable_simd)]
 use auto_ops::impl_op_ex;
 use color_eyre::Result;
 use itertools::{chain, Itertools};
 use std::array;
 use std::collections::VecDeque;
 use std::ops::IndexMut;
-use std::simd::{u8x32, Simd};
+use std::simd;
 use std::{
     fmt::{Debug, Write},
     io::{self, Read},
@@ -83,15 +85,19 @@ impl Pos {
     }
 }
 
-const WIDTH: usize = 160;
+// Since the elves expand out from their initial position, you need a wide enough row to accomodate
+// the expansion.  In the case of the inputs provided, u8x16 is not wide enough.
+type SimdVec = simd::u8x32;
+const BITS_PER_ROW: usize = 8 * SimdVec::LANES; // 256
+const NUM_ROWS: usize = 160;
 
 #[derive(Clone, Copy, Default)]
-struct Cell(Simd<u8, 32>);
+struct Row(SimdVec);
 
-impl_op_ex!(!|a: &Cell| -> Cell { Cell(!a.0) });
-impl_op_ex!(| |a: &Cell, b: &Cell | -> Cell { Cell(a.0 | b.0) });
+impl_op_ex!(!|a: &Row| -> Row { Row(!a.0) });
+impl_op_ex!(| |a: &Row, b: &Row | -> Row { Row(a.0 | b.0) });
 
-impl BitAnd for Cell {
+impl BitAnd for Row {
     type Output = Self;
 
     fn bitand(self, rhs: Self) -> Self::Output {
@@ -99,29 +105,31 @@ impl BitAnd for Cell {
     }
 }
 
-impl BitAndAssign for Cell {
+impl BitAndAssign for Row {
     fn bitand_assign(&mut self, rhs: Self) {
         self.0 &= rhs.0
     }
 }
 
-impl BitOrAssign for Cell {
+impl BitOrAssign for Row {
     fn bitor_assign(&mut self, rhs: Self) {
         self.0 |= rhs.0
     }
 }
 
-impl Cell {
+impl Row {
     fn shift_west(&self) -> Self {
-        Self((self.0 >> u8x32::splat(1)) | (self.0.rotate_lanes_left::<1>() << u8x32::splat(7)))
+        Self((self.0 >> SimdVec::splat(1)) | (self.0.rotate_lanes_left::<1>() << SimdVec::splat(7)))
     }
 
     fn shift_east(&self) -> Self {
-        Self((self.0 << u8x32::splat(1)) | (self.0.rotate_lanes_right::<1>() >> u8x32::splat(7)))
+        Self(
+            (self.0 << SimdVec::splat(1)) | (self.0.rotate_lanes_right::<1>() >> SimdVec::splat(7)),
+        )
     }
 }
 
-impl Index<usize> for Cell {
+impl Index<usize> for Row {
     type Output = u8;
 
     fn index(&self, index: usize) -> &Self::Output {
@@ -129,28 +137,28 @@ impl Index<usize> for Cell {
     }
 }
 
-impl IndexMut<usize> for Cell {
+impl IndexMut<usize> for Row {
     fn index_mut(&mut self, index: usize) -> &mut Self::Output {
         &mut self.0[index]
     }
 }
 
-impl Cell {
+impl Row {
     fn is_empty(&self) -> bool {
-        self.0 == u8x32::splat(0)
+        self.0 == SimdVec::splat(0)
     }
 }
 
 #[derive(Clone)]
-struct BitGrid([Cell; WIDTH]);
+struct BitGrid([Row; NUM_ROWS]);
 
-struct Proposal([Cell; 4]);
+struct Proposal([Row; 4]);
 
 impl Proposal {
     fn propose(
-        [nw, n, ne]: &[Cell; 3],
-        [w, cur, e]: &[Cell; 3],
-        [sw, s, se]: &[Cell; 3],
+        [nw, n, ne]: &[Row; 3],
+        [w, cur, e]: &[Row; 3],
+        [sw, s, se]: &[Row; 3],
         priority: [Direction; 4],
     ) -> Self {
         let mut proposals = [*cur; 4];
@@ -185,9 +193,9 @@ impl Proposal {
 impl Debug for BitGrid {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let (rows, cols) = self.bounds();
-        for row in rows {
-            for col in cols.clone() {
-                if self.has_elf(row, col) {
+        for i in rows {
+            for j in cols.clone() {
+                if self.has_elf(i, j) {
                     f.write_char('#')?;
                 } else {
                     f.write_char('.')?;
@@ -201,7 +209,7 @@ impl Debug for BitGrid {
 
 impl Default for BitGrid {
     fn default() -> Self {
-        Self([Default::default(); WIDTH])
+        Self([Default::default(); NUM_ROWS])
     }
 }
 
@@ -232,12 +240,14 @@ impl BitGrid {
         (min_i..max_i + 1, min_j..max_j + 1)
     }
 
-    fn insert(&mut self, row: usize, col: usize) {
-        self.0[row][col / 8] |= 1 << (col % 8);
+    fn insert(&mut self, i: usize, j: usize) {
+        // j / 8, to get the index of the lane for j, since there are 8 bits per lane
+        self.0[i][j / 8] |= 1 << (j % 8);
     }
 
-    fn has_elf(&self, row: usize, col: usize) -> bool {
-        self.0[row][col / 8] & (1 << (col % 8)) != 0
+    fn has_elf(&self, i: usize, j: usize) -> bool {
+        // j / 8, to get the index of the lane for j, since there are 8 bits per lane
+        self.0[i][j / 8] & (1 << (j % 8)) != 0
     }
 
     #[allow(unused)]
@@ -247,9 +257,9 @@ impl BitGrid {
     }
 
     fn iter(&self) -> impl Iterator<Item = Pos> + '_ {
-        (0..WIDTH)
-            .cartesian_product(0..256)
-            .filter(|&(row, col)| self.has_elf(row, col))
+        (0..NUM_ROWS)
+            .cartesian_product(0..BITS_PER_ROW)
+            .filter(|&(i, j)| self.has_elf(i, j))
             .map(|(i, j)| Pos(i, j))
     }
 }
@@ -327,7 +337,7 @@ impl State {
         let zeros = [Default::default(); 2];
 
         chain!(&zeros, &self.grid.0, &zeros)
-            .map(|cell| [cell.shift_east(), *cell, cell.shift_west()])
+            .map(|row| [row.shift_east(), *row, row.shift_west()])
             .map_windows(|[above, cur, below]| Proposal::propose(above, cur, below, priority))
             .map_windows(|[above, cur, below]| Proposal::collide(above, cur, below))
             .enumerate()
@@ -398,11 +408,13 @@ impl Task {
 
 fn parse(s: &str) -> Result<Task> {
     let mut grid = BitGrid::new();
-    s.lines().enumerate().for_each(|(row, line)| {
+    s.lines().enumerate().for_each(|(i, line)| {
         line.chars()
             .enumerate()
             .filter(|&(_, c)| c == '#')
-            .for_each(|(col, _)| grid.insert(row + 24, col + 72))
+            // Offsets are needed to give the elves enough space to expand out from their initial
+            // positions.
+            .for_each(|(j, _)| grid.insert(i + 24, j + 72))
     });
 
     Ok(Task { grid })
