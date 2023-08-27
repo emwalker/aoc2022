@@ -37,20 +37,17 @@
 //  - https://www.reddit.com/r/adventofcode/comments/zt6xz5/comment/j1cbg9k/ (?s)
 //  - https://www.reddit.com/r/adventofcode/comments/zt6xz5/comment/j1cqqof/ (?s)
 //
-// Changes:
-//  - Simplify parsing code
-//  - Switch to SIMD and bit arithmetic
-//
+use auto_ops::impl_op_ex;
 use color_eyre::Result;
 use itertools::{chain, Itertools};
 use std::array;
 use std::collections::VecDeque;
-use std::ops::Range;
-use std::simd::u8x32;
+use std::ops::IndexMut;
+use std::simd::{u8x32, Simd};
 use std::{
     fmt::{Debug, Write},
     io::{self, Read},
-    ops::Add,
+    ops::{Add, BitAnd, BitAndAssign, BitOrAssign, Index, Range},
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -88,49 +85,101 @@ impl Pos {
 
 const WIDTH: usize = 160;
 
-#[derive(Clone)]
-struct BitGrid([u8x32; WIDTH]);
+#[derive(Clone, Copy, Default)]
+struct Cell(Simd<u8, 32>);
 
-fn shift_west(&row: &u8x32) -> u8x32 {
-    (row >> u8x32::splat(1)) | (row.rotate_lanes_left::<1>() << u8x32::splat(7))
-}
+impl_op_ex!(!|a: &Cell| -> Cell { Cell(!a.0) });
+impl_op_ex!(| |a: &Cell, b: &Cell | -> Cell { Cell(a.0 | b.0) });
 
-fn shift_east(&row: &u8x32) -> u8x32 {
-    (row << u8x32::splat(1)) | (row.rotate_lanes_right::<1>() >> u8x32::splat(7))
-}
+impl BitAnd for Cell {
+    type Output = Self;
 
-fn propose(
-    [nw, n, ne]: &[u8x32; 3],
-    [w, cur, e]: &[u8x32; 3],
-    [sw, s, se]: &[u8x32; 3],
-    priority: [Direction; 4],
-) -> [u8x32; 4] {
-    let mut propositions = [*cur; 4];
-    let mut not_chosen = nw | n | ne | w | e | sw | s | se;
-    for d in priority {
-        let (row, dir_available) = match d {
-            North => (&mut propositions[0], !(ne | n | nw)),
-            South => (&mut propositions[1], !(se | s | sw)),
-            West => (&mut propositions[2], !(nw | w | sw)),
-            East => (&mut propositions[3], !(ne | e | se)),
-        };
-        *row &= dir_available & not_chosen;
-        not_chosen &= !dir_available;
+    fn bitand(self, rhs: Self) -> Self::Output {
+        Self(self.0 & rhs.0)
     }
-    propositions
 }
 
-fn collide_proposals(
-    [_, south, _, _]: &[u8x32; 4],
-    [_, _, west, east]: &[u8x32; 4],
-    [north, _, _, _]: &[u8x32; 4],
-) -> [u8x32; 4] {
-    [
-        north & !*south,
-        south & !*north,
-        shift_west(west) & !shift_east(east),
-        shift_east(east) & !shift_west(west),
-    ]
+impl BitAndAssign for Cell {
+    fn bitand_assign(&mut self, rhs: Self) {
+        self.0 &= rhs.0
+    }
+}
+
+impl BitOrAssign for Cell {
+    fn bitor_assign(&mut self, rhs: Self) {
+        self.0 |= rhs.0
+    }
+}
+
+impl Cell {
+    fn shift_west(&self) -> Self {
+        Self((self.0 >> u8x32::splat(1)) | (self.0.rotate_lanes_left::<1>() << u8x32::splat(7)))
+    }
+
+    fn shift_east(&self) -> Self {
+        Self((self.0 << u8x32::splat(1)) | (self.0.rotate_lanes_right::<1>() >> u8x32::splat(7)))
+    }
+}
+
+impl Index<usize> for Cell {
+    type Output = u8;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.0[index]
+    }
+}
+
+impl IndexMut<usize> for Cell {
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        &mut self.0[index]
+    }
+}
+
+impl Cell {
+    fn is_empty(&self) -> bool {
+        self.0 == u8x32::splat(0)
+    }
+}
+
+#[derive(Clone)]
+struct BitGrid([Cell; WIDTH]);
+
+struct Proposal([Cell; 4]);
+
+impl Proposal {
+    fn propose(
+        [nw, n, ne]: &[Cell; 3],
+        [w, cur, e]: &[Cell; 3],
+        [sw, s, se]: &[Cell; 3],
+        priority: [Direction; 4],
+    ) -> Self {
+        let mut proposals = [*cur; 4];
+        let mut not_chosen = nw | n | ne | w | e | sw | s | se;
+        for d in priority {
+            let (row, dir_available) = match d {
+                North => (&mut proposals[0], !(ne | n | nw)),
+                South => (&mut proposals[1], !(se | s | sw)),
+                West => (&mut proposals[2], !(nw | w | sw)),
+                East => (&mut proposals[3], !(ne | e | se)),
+            };
+            *row &= dir_available & not_chosen;
+            not_chosen &= !dir_available;
+        }
+        Self(proposals)
+    }
+
+    fn collide(
+        Self([_, south, _, _]): &Self,
+        Self([_, _, west, east]): &Self,
+        Self([north, _, _, _]): &Self,
+    ) -> Self {
+        Self([
+            *north & !*south,
+            *south & !*north,
+            west.shift_west() & !east.shift_east(),
+            east.shift_east() & !west.shift_west(),
+        ])
+    }
 }
 
 impl Debug for BitGrid {
@@ -138,10 +187,10 @@ impl Debug for BitGrid {
         let (rows, cols) = self.bounds();
         for row in rows {
             for col in cols.clone() {
-                if self.get(row, col) {
-                    print!("#");
+                if self.has_elf(row, col) {
+                    f.write_char('#')?;
                 } else {
-                    print!(".");
+                    f.write_char('.')?;
                 }
             }
             f.write_char('\n')?;
@@ -150,13 +199,23 @@ impl Debug for BitGrid {
     }
 }
 
+impl Default for BitGrid {
+    fn default() -> Self {
+        Self([Default::default(); WIDTH])
+    }
+}
+
 impl BitGrid {
     fn new() -> Self {
-        Self([Default::default(); WIDTH])
+        Self::default()
     }
 
     fn len(&self) -> usize {
-        self.0.len()
+        self.0
+            .iter()
+            .flat_map(|x| x.0.as_array())
+            .map(|x| x.count_ones() as usize)
+            .sum()
     }
 
     fn bounds(&self) -> (Range<usize>, Range<usize>) {
@@ -177,20 +236,20 @@ impl BitGrid {
         self.0[row][col / 8] |= 1 << (col % 8);
     }
 
-    fn get(&self, row: usize, col: usize) -> bool {
+    fn has_elf(&self, row: usize, col: usize) -> bool {
         self.0[row][col / 8] & (1 << (col % 8)) != 0
     }
 
     #[allow(unused)]
     fn dimensions(&self) -> (usize, usize) {
         let (rows, cols) = self.bounds();
-        (rows.len() + 1, cols.len() + 1)
+        (rows.len(), cols.len())
     }
 
     fn iter(&self) -> impl Iterator<Item = Pos> + '_ {
         (0..WIDTH)
             .cartesian_product(0..256)
-            .filter(|&(row, col)| self.get(row, col))
+            .filter(|&(row, col)| self.has_elf(row, col))
             .map(|(i, j)| Pos(i, j))
     }
 }
@@ -268,22 +327,24 @@ impl State {
         let zeros = [Default::default(); 2];
 
         chain!(&zeros, &self.grid.0, &zeros)
-            .map(|row| [shift_east(row), *row, shift_west(row)])
-            .map_windows(|[above, cur, below]| propose(above, cur, below, priority))
-            .map_windows(|[above, cur, below]| collide_proposals(above, cur, below))
+            .map(|cell| [cell.shift_east(), *cell, cell.shift_west()])
+            .map_windows(|[above, cur, below]| Proposal::propose(above, cur, below, priority))
+            .map_windows(|[above, cur, below]| Proposal::collide(above, cur, below))
             .enumerate()
-            .for_each(|(i, [from_south, from_north, from_east, from_west])| {
-                let destinations = from_north | from_south | from_west | from_east;
-                if destinations == u8x32::splat(0) {
-                    return;
-                }
-                moved = true;
-                grid.0[i + 1] &= !from_south;
-                grid.0[i - 1] &= !from_north;
-                grid.0[i] &= !shift_west(&from_west);
-                grid.0[i] &= !shift_east(&from_east);
-                grid.0[i] |= destinations;
-            });
+            .for_each(
+                |(i, Proposal([from_south, from_north, from_east, from_west]))| {
+                    let destinations = from_north | from_south | from_west | from_east;
+                    if destinations.is_empty() {
+                        return;
+                    }
+                    moved = true;
+                    grid.0[i + 1] &= !from_south;
+                    grid.0[i - 1] &= !from_north;
+                    grid.0[i] &= !from_west.shift_west();
+                    grid.0[i] &= !from_east.shift_east();
+                    grid.0[i] |= destinations;
+                },
+            );
 
         priority.rotate_left(1);
 
@@ -387,7 +448,7 @@ mod tests {
     #[test]
     fn parsing() {
         let task = parse(example()).unwrap();
-        assert_eq!(task.grid.len(), 160);
+        assert_eq!(task.grid.len(), 22);
     }
 
     #[test]
