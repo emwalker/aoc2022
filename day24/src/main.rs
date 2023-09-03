@@ -6,7 +6,7 @@
 use bitflags::bitflags;
 use color_eyre::Result;
 use std::{
-    collections::VecDeque,
+    collections::{HashSet, VecDeque},
     fmt::{Debug, Write},
     io::{self, Read},
 };
@@ -14,13 +14,13 @@ use std::{
 bitflags! {
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     struct Cell: u8 {
-        const NORTH = 1 << 1;
-        const EAST  = 1 << 2;
-        const SOUTH = 1 << 3;
-        const WEST  = 1 << 4;
+        const UP    = 1 << 1;
+        const RIGHT = 1 << 2;
+        const DOWN  = 1 << 3;
+        const LEFT  = 1 << 4;
         const ELF   = 1 << 5;
-        const WIND  = Self::NORTH.bits() | Self::EAST.bits() | Self::SOUTH.bits() |
-            Self::WEST.bits();
+        const WIND  = Self::UP.bits() | Self::RIGHT.bits() | Self::DOWN.bits() |
+            Self::LEFT.bits();
     }
 }
 
@@ -28,34 +28,26 @@ impl Cell {
     fn winds(&self) -> Vec<Self> {
         let mut dirs = vec![];
 
-        if self.contains(Self::NORTH) {
-            dirs.push(Self::NORTH);
-        }
-
-        if self.contains(Self::EAST) {
-            dirs.push(Self::EAST);
-        }
-
-        if self.contains(Self::SOUTH) {
-            dirs.push(Self::SOUTH);
-        }
-
-        if self.contains(Self::WEST) {
-            dirs.push(Self::WEST);
-        }
+        [Self::UP, Self::RIGHT, Self::DOWN, Self::LEFT]
+            .iter()
+            .for_each(|&dir| {
+                if self.contains(dir) {
+                    dirs.push(dir)
+                }
+            });
 
         dirs
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 struct Pos(isize, isize);
 
 impl Pos {
-    const START: Self = Self(0, 0);
+    const ORIGIN: Self = Self(0, 0);
 
     fn adjacent(&self) -> impl Iterator<Item = Self> + '_ {
-        [(-1, 0), (0, 1), (1, 0), (0, -1)]
+        [(-1, 0), (0, 1), (1, 0), (0, -1), (0, 0)]
             .iter()
             .map(|(di, dj)| Self(self.0 + di, self.1 + dj))
     }
@@ -63,14 +55,16 @@ impl Pos {
 
 #[derive(Default, Clone)]
 struct State {
-    up: VecDeque<u128>,
+    destination: Pos,
     down: VecDeque<u128>,
-    left: Vec<u128>,
-    right: Vec<u128>,
-    width: isize,
+    elves: HashSet<Pos>,
     height: isize,
-    queue: VecDeque<Pos>,
+    left: Vec<u128>,
     minutes_passed: usize,
+    right: Vec<u128>,
+    start: Option<Pos>,
+    up: VecDeque<u128>,
+    width: isize,
 }
 
 impl Debug for State {
@@ -78,7 +72,7 @@ impl Debug for State {
         f.write_char('#')?;
         for j in 0..self.width {
             if j == 0 {
-                if self.queue.is_empty() {
+                if self.elves.is_empty() {
                     f.write_char('E')?;
                 } else {
                     f.write_char('.')?;
@@ -94,24 +88,25 @@ impl Debug for State {
             f.write_char('#')?;
 
             for j in 0..self.width {
-                let cell = self.value_at(i, j);
+                let pos = Pos(i, j);
+                let cell = self.contents(&pos);
                 let winds = cell.winds();
 
                 if !winds.is_empty() {
                     if winds.len() == 1 {
                         let c = match winds[0] {
-                            Cell::NORTH => '^',
-                            Cell::EAST => '>',
-                            Cell::SOUTH => 'v',
-                            Cell::WEST => '<',
+                            Cell::UP => '^',
+                            Cell::RIGHT => '>',
+                            Cell::DOWN => 'v',
+                            Cell::LEFT => '<',
                             _ => panic!("unknown wind: {:?}", winds),
                         };
                         f.write_char(c)?;
                     } else {
                         let n = winds.len() as u8;
-                        f.write_char(n as char)?;
+                        write!(f, "{}", n)?;
                     }
-                } else if cell == Cell::ELF {
+                } else if self.elves.contains(&pos) {
                     f.write_char('E')?;
                 } else {
                     f.write_char('.')?;
@@ -136,10 +131,11 @@ impl Debug for State {
 }
 
 impl State {
-    fn reached_exit(&self) -> bool {
-        self.queue
+    fn arrived(&self) -> bool {
+        let Pos(dest_i, dest_j) = self.destination;
+        self.elves
             .iter()
-            .any(|&Pos(i, j)| i == self.height - 1 && j == self.width - 1)
+            .any(|&Pos(i, j)| i == dest_i && j == dest_j)
     }
 
     fn tick(&mut self) {
@@ -148,35 +144,94 @@ impl State {
         self.minutes_passed += 1;
     }
 
-    fn position_open(&self, _pos: &Pos) -> bool {
-        false
+    fn position_open(&self, pos: &Pos) -> bool {
+        if pos.0 < 0 || pos.0 >= self.height {
+            return false;
+        }
+
+        if pos.1 < 0 || pos.1 >= self.width {
+            return false;
+        }
+
+        self.contents(pos) == Cell::empty()
     }
 
-    fn value_at(&self, _i: isize, _j: isize) -> Cell {
-        Cell::empty()
+    fn contents(&self, &Pos(i, j): &Pos) -> Cell {
+        debug_assert!(i >= 0 && i < self.height);
+        debug_assert!(j >= 0 && i < self.width);
+
+        let i = i as usize;
+        let mut cell = Cell::empty();
+
+        // Left
+        let j_left = 1 << (j + self.minutes_passed as isize).rem_euclid(self.width) as u128;
+        let winds_left = self.left[i];
+        if (winds_left & j_left) == j_left {
+            cell |= Cell::LEFT;
+        }
+
+        // Right
+        let j_right = 1 << (j - self.minutes_passed as isize).rem_euclid(self.width) as u128;
+        let winds_right = self.right[i];
+        if (winds_right & j_right) == j_right {
+            cell |= Cell::RIGHT;
+        }
+
+        let j = 1 << j as u128;
+
+        // Up
+        let winds_up = *self.up.get(i).expect("upward wind");
+        if (winds_up & j) == j {
+            cell |= Cell::UP;
+        }
+
+        // Down
+        let winds_down = *self.down.get(i).expect("downward wind");
+        if (winds_down & j) == j {
+            cell |= Cell::DOWN;
+        }
+
+        cell
     }
 
     fn step(&mut self) {
-        if self.queue.is_empty() && self.position_open(&Pos::START) {
-            self.queue.push_back(Pos::START);
-        }
+        self.tick();
 
-        let mut n = self.queue.len();
-
-        while let Some(pos) = self.queue.pop_front() {
-            for adj in pos.adjacent() {
-                if self.position_open(&adj) {
-                    self.queue.push_back(adj);
+        if self.elves.is_empty() {
+            if let Some(start) = self.start {
+                if self.position_open(&start) {
+                    self.elves.insert(start);
                 }
             }
-
-            n -= 1;
-            if n <= 0 {
-                break;
-            }
         }
 
-        self.tick();
+        let elves = self.elves.drain().collect::<Vec<_>>();
+
+        for pos in elves {
+            for adj in pos.adjacent() {
+                if self.position_open(&adj) {
+                    self.elves.insert(adj);
+                }
+            }
+        }
+    }
+
+    fn maze_exit(&self) -> Pos {
+        Pos(self.height - 1, self.width - 1)
+    }
+
+    fn configure(&mut self, start: Pos, destination: Pos) -> &mut Self {
+        self.elves.clear();
+        self.start = Some(start);
+        self.destination = destination;
+        self
+    }
+
+    fn travel(&mut self) -> usize {
+        while !self.arrived() {
+            self.step();
+        }
+        self.minutes_passed + 1
     }
 }
 
@@ -185,14 +240,18 @@ struct Task {
 }
 
 impl Task {
-    fn min_minutes(&self) -> usize {
+    fn part1(&self) -> usize {
         let mut state = self.initial_state.clone();
+        let exit = state.maze_exit();
+        state.configure(Pos::ORIGIN, exit).travel()
+    }
 
-        while !state.reached_exit() {
-            state.step();
-        }
-
-        state.minutes_passed
+    fn part2(&self) -> usize {
+        let mut state = self.initial_state.clone();
+        let exit = state.maze_exit();
+        state.configure(Pos::ORIGIN, exit).travel();
+        state.configure(exit, Pos::ORIGIN).travel();
+        state.configure(Pos::ORIGIN, exit).travel()
     }
 }
 
@@ -241,7 +300,8 @@ fn main() -> Result<()> {
     io::stdin().read_to_string(&mut s)?;
     let task = parse(&s)?;
 
-    println!("fewest minutes: {}", task.min_minutes());
+    println!("minutes to exit: {}", task.part1());
+    println!("after getting snacks: {}", task.part2());
 
     Ok(())
 }
@@ -257,33 +317,54 @@ mod tests {
 
     fn assert_same(state: &State, expected: &str) {
         let actual = format!("{:?}", state);
-        assert_eq!(normalize(expected), normalize(&actual));
+        assert_eq!(normalize(&actual), normalize(expected));
     }
 
     #[test]
     fn parsing() {
         let input = include_str!("../data/example.txt");
         let task = parse(input).unwrap();
-        assert_eq!(task.initial_state.height, 5);
-        assert_eq!(task.initial_state.width, 5);
+        assert_eq!(task.initial_state.height, 4);
+        assert_eq!(task.initial_state.width, 6);
     }
 
     #[test]
     fn part1() {
         let input = include_str!("../data/example.txt");
         let task = parse(input).unwrap();
-        assert_eq!(task.min_minutes(), 18);
+        assert_eq!(task.part1(), 18);
+    }
+
+    #[test]
+    fn part2() {
+        let input = include_str!("../data/example.txt");
+        let task = parse(input).unwrap();
+        assert_eq!(task.part2(), 54);
+    }
+
+    #[test]
+    fn input() {
+        let input = include_str!("../data/input.txt");
+        let task = parse(input).unwrap();
+
+        let part1 = task.part1();
+        assert_eq!(part1, 266);
+
+        let part2 = task.part2();
+        assert!(part2 > 805);
+        assert_eq!(part2, 803);
     }
 
     #[test]
     fn state() {
         let input = include_str!("../data/example.txt");
         let Task {
-            initial_state: state,
+            initial_state: mut state,
         } = parse(input).unwrap();
+        let exit = state.maze_exit();
+        state.configure(Pos::ORIGIN, exit);
 
         assert_eq!(state.minutes_passed, 0);
-
         assert_same(
             &state,
             "#E######
@@ -292,6 +373,71 @@ mod tests {
              #>v.><>#
              #<^v^^>#
              ######.#",
-        )
+        );
+
+        state.step();
+
+        assert_eq!(state.minutes_passed, 1);
+        assert_same(
+            &state,
+            "#.######
+             #E>3.<.#
+             #<..<<.#
+             #>2.22.#
+             #>v..^<#
+             ######.#",
+        );
+
+        state.step();
+
+        assert_eq!(state.minutes_passed, 2);
+        assert_same(
+            &state,
+            "#.######
+             #E2>2..#
+             #E^22^<#
+             #.>2.^>#
+             #.>..<.#
+             ######.#",
+        );
+
+        state.step();
+
+        assert_eq!(state.minutes_passed, 3);
+        assert_same(
+            &state,
+            "#.######
+             #<^<22.#
+             #E2<.2.#
+             #><2>..#
+             #..><..#
+             ######.#",
+        );
+
+        state.step();
+
+        assert_eq!(state.minutes_passed, 4);
+        assert_same(
+            &state,
+            "#.######
+             #E<..22#
+             #<<.<..#
+             #<2.>>.#
+             #.^22^.#
+             ######.#",
+        );
+
+        state.step();
+
+        assert_eq!(state.minutes_passed, 5);
+        assert_same(
+            &state,
+            "#.######
+             #2Ev.<>#
+             #<.<..<#
+             #.^>^22#
+             #.2..2.#
+             ######.#",
+        );
     }
 }
