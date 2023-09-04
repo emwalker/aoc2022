@@ -43,6 +43,7 @@ impl State {
         });
         self.right.iter_mut().for_each(|row| {
             // Q: Why are we shifting left to represent winds moving to the right?
+            // A: Because we're treating (0, 0) as 1 (no left shifting) at row 0.
             *row = (*row << 1) | (*row >> (self.width - 1));
             // Q: Why do we need the mask here, but not in the previous case?
             // A: Perhaps because the map is left-justified.
