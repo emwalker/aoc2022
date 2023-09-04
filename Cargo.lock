@@ -490,7 +490,6 @@ dependencies = [
 name = "day24"
 version = "0.1.0"
 dependencies = [
- "bitflags",
  "color-eyre",
  "itertools 0.11.0",
 ]
